@@ -1,0 +1,7 @@
+{
+  "name": "StereoGen AI Studio",
+  "description": "Transforma grabaciones mono en experiencias stereo inmersivas separando instrumentos mediante inteligencia artificial.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
