@@ -1,6 +1,6 @@
 {
-  "name": "AIWIS Audio Studio",
-  "description": "Estudio de grabación y separación de stems impulsado por IA. Visionario: Armin Salazar San Martin.",
+  "name": "AIWIS Spectral Stereoizer",
+  "description": "Transforma audio Mono en Stereo Real mediante manipulación de espectro de frecuencias. Visionario: Armin Salazar San Martin.",
   "requestFramePermissions": [
     "microphone"
   ]

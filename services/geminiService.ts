@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { TrackAnalysis, TrackData, ExportSettings } from "../types";
+import { SpectralAnalysis, FrequencyBand, ExportSettings } from "../types";
 
 const GEMINI_API_KEY = process.env.API_KEY || '';
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
@@ -17,18 +17,20 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
-export const analyzeAudioSession = async (audioBlob: Blob): Promise<TrackAnalysis> => {
+export const analyzeAudioSession = async (audioBlob: Blob): Promise<SpectralAnalysis> => {
   if (!GEMINI_API_KEY) throw new Error("API Key requerida");
 
   const base64Audio = await blobToBase64(audioBlob);
   const prompt = `
-    Analiza esta pista de audio para el estudio AIWIS.
-    Identifica:
-    1. Género Musical.
-    2. BPM aproximado y Tonalidad (Key).
-    3. Mood/Vibe.
-    4. Un resumen técnico corto para ingenieros (rango dinámico, balance).
-    5. Sugerencias de mezcla creativa.
+    Actúa como un Ingeniero de Mastering de clase mundial.
+    Analiza este audio Mono.
+    Tu objetivo es sugerir una estrategia para convertirlo en STEREO usando separación por bandas de frecuencia.
+    
+    Provee:
+    1. Frecuencias dominantes detectadas (dónde está la energía principal).
+    2. Sugerencia de Ancho Estéreo (ej: "Mantener bajos centrados, abrir medios-agudos al 40%").
+    3. Vibe/Estilo detectado.
+    4. Recomendación técnica breve para la conversión.
   `;
 
   try {
@@ -45,59 +47,51 @@ export const analyzeAudioSession = async (audioBlob: Blob): Promise<TrackAnalysi
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            genre: { type: Type.STRING },
-            bpm: { type: Type.STRING },
-            key: { type: Type.STRING },
-            mood: { type: Type.STRING },
-            technical_summary: { type: Type.STRING },
-            ai_suggestions: { type: Type.STRING },
+            dominant_frequencies: { type: Type.STRING },
+            stereo_width_suggestion: { type: Type.STRING },
+            vibe: { type: Type.STRING },
+            technical_recommendation: { type: Type.STRING },
           }
         }
       }
     });
 
-    if (response.text) return JSON.parse(response.text) as TrackAnalysis;
+    if (response.text) return JSON.parse(response.text) as SpectralAnalysis;
     throw new Error("No response text");
   } catch (error) {
     console.error(error);
     return {
-      genre: "Detectando...",
-      bpm: "--",
-      key: "--",
-      mood: "Análisis pendiente",
-      technical_summary: "El motor de IA está ocupado. Intenta nuevamente.",
-      ai_suggestions: "Ajusta niveles manualmente."
+      dominant_frequencies: "Análisis no disponible",
+      stereo_width_suggestion: "Prueba manual sugerida",
+      vibe: "Desconocido",
+      technical_recommendation: "Ajusta el paneo de frecuencias altas para dar amplitud."
     };
   }
 };
 
 export const generateSessionReport = async (
-  analysis: TrackAnalysis | null, 
-  tracks: TrackData[], 
+  analysis: SpectralAnalysis | null, 
+  bands: FrequencyBand[], 
   settings: ExportSettings
 ): Promise<string> => {
     const prompt = `
-      Genera un informe técnico formal en formato Markdown para una sesión de estudio de grabación AIWIS.
+      Genera un informe técnico de Mastering Espectral para AIWIS.
       
-      Detalles de la sesión:
-      Visionario: Armin Salazar San Martin
-      Género: ${analysis?.genre || 'N/A'}
-      BPM/Key: ${analysis?.bpm} / ${analysis?.key}
+      Análisis IA:
+      - Dominante: ${analysis?.dominant_frequencies}
+      - Sugerencia Stereo: ${analysis?.stereo_width_suggestion}
       
-      Pistas (Stems):
-      ${tracks.map(t => `- ${t.name}: Vol ${(t.volume*100).toFixed(0)}%, Pan ${t.pan}, ${t.muted ? '(MUTE)' : ''}`).join('\n')}
+      Configuración de Bandas (Spectral Map):
+      ${bands.map(b => `- ${b.label} (${b.range[0]}-${b.range[1]}Hz): Pan ${b.pan}, Vol ${b.volume}`).join('\n')}
       
-      Configuración de Exportación:
-      Formato: ${settings.format.toUpperCase()}
-      Calidad: ${settings.sampleRate}Hz / ${settings.bitDepth}bit
-      Ajuste 440Hz: ${settings.standardPitch ? 'Sí' : 'No'}
+      Formato Salida: ${settings.format.toUpperCase()} ${settings.sampleRate}Hz
       
-      Crea un resumen ejecutivo elegante y profesional.
+      Crea un resumen de cómo se ha expandido la imagen estéreo de esta grabación.
     `;
 
     try {
         const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
+            model: "gemini-3-flash-preview",
             contents: prompt
         });
         return response.text || "No se pudo generar el informe.";

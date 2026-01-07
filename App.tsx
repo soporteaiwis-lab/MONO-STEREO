@@ -1,32 +1,25 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Upload, Activity, Zap, Layers, Music, Server, Settings, FileAudio, Download, FileText, Sliders, Play, Scissors, AlertCircle } from 'lucide-react';
+import { Upload, Activity, Zap, Layers, Server, Settings, Download, FileText, AlertCircle, RefreshCw } from 'lucide-react';
 import { audioEngine } from './services/audioEngine';
 import { analyzeAudioSession, generateSessionReport } from './services/geminiService';
-import { AppState, TrackAnalysis, TrackData, ExportSettings, EQBand, DEFAULT_EQ_BANDS } from './types';
+import { AppState, SpectralAnalysis, FrequencyBand, ExportSettings, SPECTRAL_BANDS_TEMPLATE } from './types';
 import Visualizer from './components/Visualizer';
 import Knob from './components/Knob';
 import Fader from './components/Fader';
 import Transport from './components/Transport';
-import EQPanel from './components/EQPanel';
 
 const App: React.FC = () => {
   // State
   const [state, setState] = useState<AppState>(AppState.IDLE);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [tracks, setTracks] = useState<TrackData[]>([]);
+  const [bands, setBands] = useState<FrequencyBand[]>([]);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  const [analysis, setAnalysis] = useState<TrackAnalysis | null>(null);
+  const [analysis, setAnalysis] = useState<SpectralAnalysis | null>(null);
   
-  // Selection State
-  const [selectedInstruments, setSelectedInstruments] = useState({
-    drums: true, bass: true, vocals: true, guitars: true, piano: false, strings: false
-  });
-
   // Studio State
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [activeTrackEQ, setActiveTrackEQ] = useState<string | null>(null); // ID of track showing EQ
 
   // Modals
   const [showExportModal, setShowExportModal] = useState(false);
@@ -70,126 +63,55 @@ const App: React.FC = () => {
     const file = event.target.files?.[0];
     if (file) {
       setAudioBlob(file);
-      setState(AppState.SELECTION); // Go to selection step
+      startSpectralProcessing(file);
     }
   };
 
-  const startProcessing = async () => {
-    if (!audioBlob) return;
-    setState(AppState.PROCESSING);
+  const startSpectralProcessing = async (blob: Blob) => {
+    setState(AppState.ANALYZING);
 
-    // 1. Generate Tracks based on Selection (Simulating Separation)
-    const newTracks: TrackData[] = [];
-    let idCounter = 1;
-
-    // Helper to create track
-    const addTrack = (name: string, type: TrackData['type'], range: [number, number]) => {
-      newTracks.push({
-        id: `t${idCounter++}`,
-        name,
-        type,
-        volume: 0.8,
-        pan: 0,
-        muted: false,
-        solo: false,
-        frequencyRange: range,
-        eqEnabled: true,
-        eqBands: JSON.parse(JSON.stringify(DEFAULT_EQ_BANDS)) // Deep copy
-      });
-    };
-
-    // Frequency Maps for Simulation
-    if (selectedInstruments.bass) addTrack('Bass / Sub', 'bass', [0, 250]);
-    if (selectedInstruments.drums) addTrack('Drums (Full)', 'drums', [20, 16000]); // Full range initially
-    if (selectedInstruments.guitars) addTrack('Guitars / Mids', 'other', [250, 4000]);
-    if (selectedInstruments.piano) addTrack('Piano / Keys', 'other', [200, 6000]);
-    if (selectedInstruments.vocals) addTrack('Vocals / Lead', 'vocals', [400, 10000]);
-    if (selectedInstruments.strings) addTrack('Orchestral', 'other', [300, 12000]);
+    // 1. Initialize Bands from Template
+    const initialBands: FrequencyBand[] = SPECTRAL_BANDS_TEMPLATE.map((t, idx) => ({
+      ...t,
+      id: `band_${idx}`,
+      volume: 1.0,
+      pan: 0, // Start centered
+      muted: false,
+      solo: false
+    }));
     
-    // Always add an "Air" track for clarity
-    addTrack('Air / Ambience', 'other', [10000, 20000]);
-
-    setTracks(newTracks);
+    setBands(initialBands);
 
     try {
-      // 2. Load into Audio Engine
-      await audioEngine.loadAudio(audioBlob, newTracks);
+      // 2. Load into Audio Engine (This creates the filters)
+      await audioEngine.loadAudio(blob, initialBands);
       setDuration(audioEngine.duration);
 
       // 3. AI Analysis
-      analyzeAudioSession(audioBlob).then(setAnalysis).catch(console.error);
+      analyzeAudioSession(blob).then(setAnalysis).catch(console.error);
 
       setState(AppState.STUDIO);
     } catch (e) {
       console.error(e);
-      handleError("Error al procesar el audio. El archivo puede estar corrupto.");
+      handleError("Error al inicializar el motor espectral.");
     }
   };
 
-  // Drum Micro-Split Logic
-  const decomposeDrums = async (drumTrackId: string) => {
-    setIsPlaying(false);
-    audioEngine.pause();
-
-    const drumTrack = tracks.find(t => t.id === drumTrackId);
-    if (!drumTrack) return;
-
-    // Create new sub-tracks with specific isolation profiles
-    const kickTrack: TrackData = {
-      ...drumTrack, id: `${drumTrackId}_kick`, name: 'Kick (Split)', type: 'kick', frequencyRange: [0, 120], isDecomposed: true, eqBands: JSON.parse(JSON.stringify(DEFAULT_EQ_BANDS))
-    };
-    const snareTrack: TrackData = {
-        ...drumTrack, id: `${drumTrackId}_snare`, name: 'Snare (Split)', type: 'snare', frequencyRange: [150, 4000], isDecomposed: true, eqBands: JSON.parse(JSON.stringify(DEFAULT_EQ_BANDS))
-    };
-    const cymbalsTrack: TrackData = {
-        ...drumTrack, id: `${drumTrackId}_oh`, name: 'Overheads (Split)', type: 'cymbals', frequencyRange: [4000, 20000], isDecomposed: true, eqBands: JSON.parse(JSON.stringify(DEFAULT_EQ_BANDS))
-    };
-
-    // Replace original drums with splits
-    const updatedTracks = tracks.filter(t => t.id !== drumTrackId);
-    updatedTracks.splice(1, 0, kickTrack, snareTrack, cymbalsTrack); // Insert after Bass
-
-    setTracks(updatedTracks);
-    
-    // Reload Engine
-    setState(AppState.PROCESSING);
-    await audioEngine.loadAudio(audioBlob!, updatedTracks);
-    setState(AppState.STUDIO);
-  };
-
-  const updateTrack = (id: string, updates: Partial<TrackData>) => {
-    setTracks(prev => {
-      const newTracks = prev.map(t => t.id === id ? { ...t, ...updates } : t);
-      const activeSolo = newTracks.some(t => t.solo);
+  const updateBand = (id: string, updates: Partial<FrequencyBand>) => {
+    setBands(prev => {
+      const newBands = prev.map(b => b.id === id ? { ...b, ...updates } : b);
+      const activeSolo = newBands.some(b => b.solo);
       
-      // Update Audio Engine immediately
-      const track = newTracks.find(t => t.id === id);
-      if (track) audioEngine.updateTrackParams(track, activeSolo);
+      const band = newBands.find(b => b.id === id);
+      if (band) audioEngine.updateBandParams(band, activeSolo);
       
-      // If updating solo/mute, refresh all tracks to respect logic
+      // Refresh mutes if solo changed
       if ('solo' in updates || 'muted' in updates) {
-          newTracks.forEach(t => audioEngine.updateTrackParams(t, activeSolo));
+          newBands.forEach(b => audioEngine.updateBandParams(b, activeSolo));
       }
 
-      return newTracks;
+      return newBands;
     });
-  };
-
-  const updateEQBand = (trackId: string, bandId: number, updates: Partial<EQBand>) => {
-      setTracks(prev => {
-          const newTracks = prev.map(t => {
-              if (t.id !== trackId) return t;
-              const newBands = t.eqBands.map(b => b.id === bandId ? {...b, ...updates} : b);
-              const updatedTrack = { ...t, eqBands: newBands };
-              
-              // Find active solo state from global tracks, not just this map
-              const activeSolo = prev.some(tk => tk.solo); 
-              audioEngine.updateTrackParams(updatedTrack, activeSolo);
-              
-              return updatedTrack;
-          });
-          return newTracks;
-      });
   };
 
   const handleExport = () => {
@@ -197,7 +119,7 @@ const App: React.FC = () => {
     const url = URL.createObjectURL(audioBlob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `AIWIS_Master_Split_${exportSettings.sampleRate}Hz.${exportSettings.format}`;
+    a.download = `AIWIS_Stereo_Remaster_${exportSettings.sampleRate}Hz.${exportSettings.format}`;
     a.click();
     setShowExportModal(false);
   };
@@ -210,16 +132,16 @@ const App: React.FC = () => {
         <div className="flex items-center gap-3">
           <Activity className="h-6 w-6 text-daw-accent" />
           <div className="leading-tight">
-            <h1 className="text-xl font-bold tracking-widest text-white">AIWIS <span className="text-daw-accent font-light">DSP</span></h1>
+            <h1 className="text-xl font-bold tracking-widest text-white">AIWIS <span className="text-daw-accent font-light">SPECTRAL</span></h1>
             <p className="text-[10px] text-gray-500 uppercase tracking-[0.2em]">Armin Salazar San Martin</p>
           </div>
         </div>
         {state === AppState.STUDIO && (
           <div className="flex gap-4">
             <button onClick={() => setShowExportModal(true)} className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-daw-surface hover:bg-daw-accent hover:text-black rounded transition">
-              <Download className="h-4 w-4" /> EXPORTAR
+              <Download className="h-4 w-4" /> EXPORTAR STEREO
             </button>
-            <button onClick={async () => setReport(await generateSessionReport(analysis, tracks, exportSettings))} className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-daw-surface hover:text-white rounded transition text-gray-400">
+            <button onClick={async () => setReport(await generateSessionReport(analysis, bands, exportSettings))} className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-daw-surface hover:text-white rounded transition text-gray-400">
               <FileText className="h-4 w-4" /> INFORME
             </button>
           </div>
@@ -240,9 +162,9 @@ const App: React.FC = () => {
         {state === AppState.IDLE && (
           <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-12 animate-fade-in-up">
             <div className="text-center space-y-4">
-              <h2 className="text-5xl font-black text-white tracking-tighter">DSP NEURAL <span className="text-daw-accent">ENGINE</span></h2>
+              <h2 className="text-5xl font-black text-white tracking-tighter">SPECTRAL <span className="text-daw-accent">STEREOIZER</span></h2>
               <p className="text-xl text-daw-muted max-w-2xl mx-auto">
-                Separación de fuentes (Stem Separation) de alta fidelidad con descomposición de batería y EQ paramétrico.
+                Convierte audio Mono en Stereo Real mediante la manipulación quirúrgica de 8 bandas de frecuencia.
               </p>
             </div>
             <div 
@@ -253,54 +175,20 @@ const App: React.FC = () => {
               <div className="p-4 bg-daw-bg rounded-full group-hover:scale-110 transition">
                  <Upload className="h-8 w-8 text-daw-accent" />
               </div>
-              <span className="text-sm font-bold text-gray-300">CARGAR AUDIO (WAV/MP3)</span>
+              <span className="text-sm font-bold text-gray-300">CARGAR AUDIO MONO</span>
             </div>
           </div>
         )}
 
-        {/* --- SELECTION STATE --- */}
-        {state === AppState.SELECTION && (
-            <div className="max-w-2xl mx-auto bg-daw-panel border border-daw-surface rounded-xl p-8 space-y-8 animate-fade-in-up">
-                <div className="text-center">
-                    <h2 className="text-2xl font-bold text-white mb-2">Configuración de Pre-Procesamiento</h2>
-                    <p className="text-daw-muted">Selecciona los instrumentos que detectas en la grabación para optimizar el modelo de separación.</p>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                    {Object.entries(selectedInstruments).map(([key, val]) => (
-                        <label key={key} className={`flex items-center gap-3 p-4 rounded-lg border cursor-pointer transition ${val ? 'bg-daw-accent/10 border-daw-accent' : 'bg-daw-bg border-daw-surface'}`}>
-                            <input 
-                                type="checkbox" 
-                                checked={val} 
-                                onChange={() => setSelectedInstruments(prev => ({...prev, [key as keyof typeof selectedInstruments]: !val}))}
-                                className="accent-daw-accent w-5 h-5"
-                            />
-                            <span className="font-mono text-sm uppercase font-bold text-gray-200">{key}</span>
-                        </label>
-                    ))}
-                </div>
-
-                <button 
-                    onClick={startProcessing}
-                    className="w-full py-4 bg-daw-accent text-black font-black text-lg rounded-lg hover:shadow-[0_0_20px_rgba(0,240,255,0.4)] transition"
-                >
-                    INICIAR SEPARACIÓN DE STEMS
-                </button>
-            </div>
-        )}
-
-        {/* --- PROCESSING STATE --- */}
-        {state === AppState.PROCESSING && (
+        {/* --- ANALYZING STATE --- */}
+        {state === AppState.ANALYZING && (
           <div className="flex flex-col items-center justify-center h-[60vh] space-y-6">
             <div className="relative">
-              <div className="absolute inset-0 bg-daw-secondary blur-xl opacity-20 animate-pulse-slow"></div>
-              <Zap className="h-16 w-16 text-daw-secondary animate-bounce relative z-10" />
+              <div className="absolute inset-0 bg-daw-accent blur-xl opacity-20 animate-pulse-slow"></div>
+              <RefreshCw className="h-16 w-16 text-daw-accent animate-spin relative z-10" />
             </div>
-            <h2 className="text-2xl font-mono text-white">AISLANDO FUENTES...</h2>
-            <div className="w-64 h-2 bg-daw-surface rounded-full overflow-hidden">
-                <div className="h-full bg-daw-secondary animate-[width_2s_ease-in-out_infinite]" style={{width: '50%'}}></div>
-            </div>
-            <p className="text-daw-muted text-sm">Aplicando filtros de fase lineal y descomposición espectral.</p>
+            <h2 className="text-2xl font-mono text-white">DIVIDIENDO ESPECTRO...</h2>
+            <p className="text-daw-muted text-sm">Creando crossovers de frecuencia y asignando filtros.</p>
           </div>
         )}
 
@@ -308,30 +196,38 @@ const App: React.FC = () => {
         {state === AppState.STUDIO && (
           <div className="space-y-6">
             
-            {/* Visualizer & Transport Rack */}
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-              <div className="xl:col-span-2 bg-daw-panel border border-daw-surface rounded-lg p-1 relative shadow-2xl h-[280px]">
+            {/* Visualizer & Info Rack */}
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 h-[320px]">
+              <div className="xl:col-span-2 bg-daw-panel border border-daw-surface rounded-lg p-1 relative shadow-2xl overflow-hidden">
                  <Visualizer isPlaying={isPlaying} />
-                 <div className="absolute top-4 right-4 bg-black/50 backdrop-blur px-3 py-1 rounded text-xs font-mono text-daw-success border border-daw-success/30">
-                    DSP ACTIVE: 44.1kHz / 32-bit Float
+                 {/* Legend */}
+                 <div className="absolute bottom-2 right-2 flex gap-4 text-[10px] font-mono bg-black/50 p-2 rounded">
+                    <div className="flex items-center gap-1"><div className="w-2 h-2 bg-[#00f0ff]"></div> CANAL L (Left)</div>
+                    <div className="flex items-center gap-1"><div className="w-2 h-2 bg-[#ff003c]"></div> CANAL R (Right)</div>
                  </div>
               </div>
               
-              <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-4 h-full">
                  {/* AI Info */}
                  <div className="flex-1 bg-daw-panel border border-daw-surface rounded-lg p-4 custom-scrollbar overflow-y-auto">
-                    <h3 className="flex items-center gap-2 text-white font-bold text-sm mb-3"><Server className="h-4 w-4 text-daw-accent"/> ANÁLISIS ESPECTRAL</h3>
+                    <h3 className="flex items-center gap-2 text-white font-bold text-sm mb-3"><Server className="h-4 w-4 text-daw-accent"/> ANÁLISIS ESPECTRAL IA</h3>
                     {analysis ? (
-                        <div className="space-y-2 text-xs text-gray-400">
-                            <p><span className="text-daw-muted">GENRE:</span> {analysis.genre}</p>
-                            <p><span className="text-daw-muted">KEY/BPM:</span> {analysis.key} / {analysis.bpm}</p>
-                            <p className="italic border-l-2 border-daw-secondary pl-2 mt-2">{analysis.ai_suggestions}</p>
+                        <div className="space-y-3 text-xs text-gray-400">
+                            <div>
+                                <span className="text-daw-muted block mb-1">FRECUENCIAS DOMINANTES</span>
+                                <span className="text-white font-mono">{analysis.dominant_frequencies}</span>
+                            </div>
+                             <div>
+                                <span className="text-daw-muted block mb-1">SUGERENCIA STEREO</span>
+                                <span className="text-daw-accent">{analysis.stereo_width_suggestion}</span>
+                            </div>
+                            <p className="italic border-l-2 border-daw-secondary pl-2 text-[10px]">{analysis.technical_recommendation}</p>
                         </div>
-                    ) : <span className="text-xs text-daw-muted animate-pulse">Analizando...</span>}
+                    ) : <span className="text-xs text-daw-muted animate-pulse">Consultando a Gemini...</span>}
                  </div>
                  
                  {/* Transport */}
-                 <div className="h-24">
+                 <div className="">
                      <Transport 
                         isPlaying={isPlaying} 
                         onPlay={() => { audioEngine.play(); setIsPlaying(true); }}
@@ -345,74 +241,42 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* EQ Overlay Area */}
-            {activeTrackEQ && (
-                <div className="h-64 animate-fade-in-up">
-                    <EQPanel 
-                        trackName={tracks.find(t => t.id === activeTrackEQ)?.name || 'Track'}
-                        bands={tracks.find(t => t.id === activeTrackEQ)?.eqBands || []}
-                        enabled={tracks.find(t => t.id === activeTrackEQ)?.eqEnabled || false}
-                        onToggle={() => updateTrack(activeTrackEQ, { eqEnabled: !tracks.find(t => t.id === activeTrackEQ)?.eqEnabled })}
-                        onUpdateBand={(bandId, updates) => updateEQBand(activeTrackEQ, bandId, updates)}
-                    />
-                </div>
-            )}
-
-            {/* Mixer Console */}
+            {/* SPECTRAL MIXER CONSOLE */}
             <div className="bg-daw-panel border-t border-daw-surface p-6 shadow-2xl overflow-x-auto pb-12">
-              <div className="flex items-center gap-2 mb-6">
-                <Layers className="h-5 w-5 text-daw-muted" />
-                <h3 className="font-bold text-white tracking-widest text-sm">CONSOLA DE MEZCLA</h3>
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-2">
+                    <Layers className="h-5 w-5 text-daw-muted" />
+                    <h3 className="font-bold text-white tracking-widest text-sm">CONSOLA ESPECTRAL (8 BANDAS)</h3>
+                </div>
+                <div className="text-xs text-daw-muted font-mono">
+                    MOVER PANEO PARA CREAR STEREO
+                </div>
               </div>
               
-              <div className="flex gap-2 min-w-max">
-                {tracks.map(track => (
-                  <div key={track.id} className={`w-[160px] bg-daw-bg border ${track.isDecomposed ? 'border-daw-secondary/50' : 'border-daw-surface'} rounded-lg p-3 flex flex-col items-center gap-4 relative group`}>
+              <div className="flex gap-2 min-w-max justify-between">
+                {bands.map(band => (
+                  <div key={band.id} className="w-[140px] bg-daw-bg border border-daw-surface rounded-lg p-3 flex flex-col items-center gap-3 relative group hover:border-daw-accent/30 transition-colors">
                     
-                    {/* Header */}
-                    <div className="w-full text-center space-y-1">
-                       <input 
-                         type="text" 
-                         value={track.name} 
-                         onChange={(e) => updateTrack(track.id, { name: e.target.value })}
-                         className="w-full bg-transparent text-center text-xs font-bold text-gray-300 focus:text-white outline-none"
-                       />
-                       {track.isDecomposed && <span className="text-[9px] text-daw-secondary uppercase font-bold">Micro-Split</span>}
+                    {/* Frequency Header */}
+                    <div className="w-full text-center">
+                       <h4 className={`text-xs font-black ${band.color}`}>{band.label}</h4>
+                       <span className="text-[9px] text-gray-500 font-mono block">{band.range[0]}Hz - {band.range[1]}Hz</span>
                     </div>
 
-                    {/* Tools */}
+                    {/* Mute/Solo */}
                     <div className="flex justify-center gap-1 w-full">
-                       <button onClick={() => updateTrack(track.id, { muted: !track.muted })} className={`flex-1 py-1 text-[10px] font-bold rounded ${track.muted ? 'bg-red-500 text-white' : 'bg-daw-surface text-gray-400'}`}>M</button>
-                       <button onClick={() => updateTrack(track.id, { solo: !track.solo })} className={`flex-1 py-1 text-[10px] font-bold rounded ${track.solo ? 'bg-yellow-400 text-black' : 'bg-daw-surface text-gray-400'}`}>S</button>
+                       <button onClick={() => updateBand(band.id, { muted: !band.muted })} className={`flex-1 py-1 text-[10px] font-bold rounded ${band.muted ? 'bg-daw-surface text-gray-500' : 'bg-daw-surface text-gray-300 hover:bg-gray-700'}`}>M</button>
+                       <button onClick={() => updateBand(band.id, { solo: !band.solo })} className={`flex-1 py-1 text-[10px] font-bold rounded ${band.solo ? 'bg-yellow-400 text-black' : 'bg-daw-surface text-gray-300 hover:bg-gray-700'}`}>S</button>
                     </div>
 
-                    {/* Special Drum Split Button */}
-                    {track.type === 'drums' && !track.isDecomposed && (
-                        <button 
-                            onClick={() => decomposeDrums(track.id)}
-                            className="w-full py-1 bg-daw-panel border border-daw-surface hover:border-daw-accent text-[10px] text-daw-accent flex items-center justify-center gap-1 rounded"
-                            title="Descomponer Batería (Kick, Snare, OH)"
-                        >
-                            <Scissors className="h-3 w-3" /> SPLIT DRUMS
-                        </button>
-                    )}
+                    <div className="w-full h-[1px] bg-daw-surface my-1"></div>
 
-                    {/* EQ Toggle */}
-                    <button 
-                        onClick={() => setActiveTrackEQ(activeTrackEQ === track.id ? null : track.id)}
-                        className={`w-full py-1 text-[10px] font-bold border rounded flex items-center justify-center gap-1 ${activeTrackEQ === track.id ? 'bg-daw-accent text-black border-daw-accent' : 'bg-transparent text-gray-400 border-daw-surface hover:text-white'}`}
-                    >
-                        <Sliders className="h-3 w-3" /> EQ
-                    </button>
-
-                    {/* Controls */}
-                    <Knob label="PAN" value={track.pan} min={-1} max={1} step={0.1} onChange={(v) => updateTrack(track.id, { pan: v })} />
-                    <Fader value={track.volume} min={0} max={1.5} step={0.01} onChange={(v) => updateTrack(track.id, { volume: v })} height="h-40" />
+                    {/* PANNING (The core feature) */}
+                    <Knob label="STEREO PAN" value={band.pan} min={-1} max={1} step={0.05} onChange={(v) => updateBand(band.id, { pan: v })} color={band.color} />
                     
-                    {/* Meter */}
-                    <div className="w-full h-1 bg-gray-800 rounded overflow-hidden">
-                        <div className="h-full bg-green-500 transition-all" style={{ width: `${Math.min(track.volume * 80, 100)}%`, opacity: isPlaying ? 1 : 0.3 }}></div>
-                    </div>
+                    {/* VOL */}
+                    <Fader value={band.volume} min={0} max={1.5} step={0.01} onChange={(v) => updateBand(band.id, { volume: v })} height="h-32" />
+                    
                   </div>
                 ))}
               </div>
@@ -425,20 +289,32 @@ const App: React.FC = () => {
         {showExportModal && (
           <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
             <div className="bg-daw-panel border border-daw-surface p-8 rounded-xl max-w-md w-full space-y-6">
-               <h3 className="text-xl font-bold text-white flex items-center gap-2"><Settings className="h-5 w-5"/> RENDERIZAR MIXDOWN</h3>
+               <h3 className="text-xl font-bold text-white flex items-center gap-2"><Settings className="h-5 w-5"/> RENDERIZAR FINAL</h3>
                <div className="space-y-4">
                  <div>
-                   <label className="text-xs text-daw-muted block mb-1">FORMATO MASTER</label>
+                   <label className="text-xs text-daw-muted block mb-1">FORMATO</label>
                    <div className="flex gap-2">
                      <button onClick={() => setExportSettings(s => ({...s, format: 'wav'}))} className={`flex-1 py-2 text-sm rounded ${exportSettings.format === 'wav' ? 'bg-daw-accent text-black font-bold' : 'bg-daw-surface'}`}>WAV (PCM)</button>
                      <button onClick={() => setExportSettings(s => ({...s, format: 'mp3'}))} className={`flex-1 py-2 text-sm rounded ${exportSettings.format === 'mp3' ? 'bg-daw-accent text-black font-bold' : 'bg-daw-surface'}`}>MP3</button>
                    </div>
                  </div>
-                 {/* ... (rest of export settings same as before) ... */}
+                 {/* Simplified Sample Rate for Export */}
+                 <div>
+                   <label className="text-xs text-daw-muted block mb-1">CALIDAD</label>
+                   <select 
+                      value={exportSettings.sampleRate}
+                      onChange={(e) => setExportSettings(s => ({...s, sampleRate: Number(e.target.value) as any}))}
+                      className="w-full bg-daw-bg border border-daw-surface rounded p-2 text-sm"
+                   >
+                     <option value={44100}>44.1 kHz</option>
+                     <option value={48000}>48 kHz</option>
+                     <option value={96000}>96 kHz</option>
+                   </select>
+                 </div>
                </div>
                <div className="flex gap-4 pt-4">
                  <button onClick={() => setShowExportModal(false)} className="flex-1 py-3 text-sm text-gray-400 hover:text-white">Cancelar</button>
-                 <button onClick={handleExport} className="flex-1 py-3 bg-daw-success text-black font-bold rounded hover:bg-green-400">EXPORTAR</button>
+                 <button onClick={handleExport} className="flex-1 py-3 bg-daw-success text-black font-bold rounded hover:bg-green-400">DESCARGAR</button>
                </div>
             </div>
           </div>

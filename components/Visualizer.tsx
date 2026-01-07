@@ -17,42 +17,53 @@ const Visualizer: React.FC<VisualizerProps> = ({ isPlaying }) => {
     if (!ctx) return;
 
     const render = () => {
-      const dataArray = audioEngine.getAnalysisData();
-      const bufferLength = dataArray.length;
+      const { left, right } = audioEngine.getAnalysisData();
+      const bufferLength = left.length; // Same for right
 
       // Ensure canvas size matches display size
       canvas.width = canvas.offsetWidth;
       canvas.height = canvas.offsetHeight;
       const width = canvas.width;
       const height = canvas.height;
+      
+      // Split visualizer area: Top half = Left, Bottom half = Right
+      const centerY = height / 2;
 
       ctx.clearRect(0, 0, width, height);
 
+      // --- Draw Background Lines ---
+      ctx.strokeStyle = '#1e1e24';
+      ctx.beginPath();
+      ctx.moveTo(0, centerY);
+      ctx.lineTo(width, centerY);
+      ctx.stroke();
+
       const barWidth = (width / bufferLength) * 2.5;
-      let barHeight;
       let x = 0;
 
       for (let i = 0; i < bufferLength; i++) {
-        barHeight = (dataArray[i] / 255) * height;
+        const barHeightL = (left[i] / 255) * (height / 2);
+        const barHeightR = (right[i] / 255) * (height / 2);
 
-        // Gradient based on frequency
-        const gradient = ctx.createLinearGradient(0, height, 0, height - barHeight);
-        gradient.addColorStop(0, '#6366f1'); // Indigo
-        gradient.addColorStop(0.5, '#00f0ff'); // Cyan
-        gradient.addColorStop(1, '#ff003c'); // Red
+        // --- LEFT CHANNEL (Top, going up) ---
+        // Cool Blue/Cyan gradient
+        ctx.fillStyle = `rgba(0, 240, 255, ${left[i]/255})`;
+        ctx.fillRect(x, centerY - barHeightL, barWidth, barHeightL);
 
-        ctx.fillStyle = gradient;
-        
-        // Reflection effect
-        ctx.fillRect(x, height - barHeight, barWidth, barHeight);
-        
-        // Mirror effect for stereo look
-        ctx.globalAlpha = 0.2;
-        ctx.fillRect(x, height, barWidth, barHeight * 0.5); 
-        ctx.globalAlpha = 1.0;
+        // --- RIGHT CHANNEL (Bottom, going down) ---
+        // Cool Purple/Pink gradient
+        ctx.fillStyle = `rgba(255, 0, 60, ${right[i]/255})`;
+        ctx.fillRect(x, centerY, barWidth, barHeightR);
 
         x += barWidth + 1;
       }
+      
+      // Labels
+      ctx.font = '10px monospace';
+      ctx.fillStyle = '#00f0ff';
+      ctx.fillText("L", 10, centerY - 10);
+      ctx.fillStyle = '#ff003c';
+      ctx.fillText("R", 10, centerY + 20);
 
       if (isPlaying) {
         animationFrameId = requestAnimationFrame(render);
@@ -67,8 +78,7 @@ const Visualizer: React.FC<VisualizerProps> = ({ isPlaying }) => {
   }, [isPlaying]);
 
   return (
-    <div className="w-full h-48 bg-cyber-800 rounded-lg overflow-hidden border border-cyber-600 shadow-inner relative">
-      <div className="absolute top-2 left-2 text-xs text-cyber-400 font-mono z-10">ANALIZADOR DE ESPECTRO</div>
+    <div className="w-full h-full bg-daw-panel/50 rounded-lg overflow-hidden relative">
       <canvas ref={canvasRef} className="w-full h-full" />
     </div>
   );
