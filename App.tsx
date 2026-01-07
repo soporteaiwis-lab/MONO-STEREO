@@ -109,7 +109,7 @@ const App: React.FC = () => {
               <span className="text-xl font-bold tracking-tighter text-white">StereoGen<span className="text-cyber-accent">AI</span></span>
             </div>
             <div className="hidden md:flex space-x-8 text-sm font-medium text-gray-400">
-              <a href="https://www.simpledata.cl" target="_blank" rel="noreferrer" className="hover:text-cyber-accent transition">WWW.SIMPLEDATA.CL</a>
+              <a href="https://www.nicolasvenegas.cl" target="_blank" rel="noreferrer" className="hover:text-cyber-accent transition">WWW.SIMPLEDATA.CL</a>
               <a href="https://www.aiwis.cl" target="_blank" rel="noreferrer" className="hover:text-cyber-accent transition">WWW.AIWIS.CL</a>
             </div>
           </div>
@@ -122,7 +122,7 @@ const App: React.FC = () => {
         {/* Header Section */}
         <div className="text-center space-y-4">
           <h1 className="text-4xl md:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-gray-200 to-gray-500">
-            DE MONO A STEREO
+            DE MONO A STEREO | Inspirada en la idea de Nicolas "Condor" Vengeas
           </h1>
           <p className="text-lg text-cyber-400 max-w-2xl mx-auto">
             Transforma grabaciones de ensayo o pistas antiguas en mezclas inmersivas. 
