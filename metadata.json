@@ -1,6 +1,6 @@
 {
-  "name": "StereoGen AI Studio",
-  "description": "Transforma grabaciones mono en experiencias stereo inmersivas separando instrumentos mediante inteligencia artificial.",
+  "name": "AIWIS Audio Studio",
+  "description": "Estudio de grabación y separación de stems impulsado por IA. Visionario: Armin Salazar San Martin.",
   "requestFramePermissions": [
     "microphone"
   ]

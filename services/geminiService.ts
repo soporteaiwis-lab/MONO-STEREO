@@ -1,9 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { TrackAnalysis } from "../types";
+import { TrackAnalysis, TrackData, ExportSettings } from "../types";
 
 const GEMINI_API_KEY = process.env.API_KEY || '';
-
-// Initialize Gemini
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 const blobToBase64 = (blob: Blob): Promise<string> => {
@@ -11,7 +9,6 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64String = reader.result as string;
-      // Remove data url prefix (e.g., "data:audio/wav;base64,")
       const base64Content = base64String.split(',')[1];
       resolve(base64Content);
     };
@@ -20,34 +17,26 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
-export const analyzeAudioContent = async (audioBlob: Blob): Promise<TrackAnalysis> => {
-  if (!GEMINI_API_KEY) {
-    throw new Error("API Key faltante. Configura process.env.API_KEY");
-  }
+export const analyzeAudioSession = async (audioBlob: Blob): Promise<TrackAnalysis> => {
+  if (!GEMINI_API_KEY) throw new Error("API Key requerida");
+
+  const base64Audio = await blobToBase64(audioBlob);
+  const prompt = `
+    Analiza esta pista de audio para el estudio AIWIS.
+    Identifica:
+    1. Género Musical.
+    2. BPM aproximado y Tonalidad (Key).
+    3. Mood/Vibe.
+    4. Un resumen técnico corto para ingenieros (rango dinámico, balance).
+    5. Sugerencias de mezcla creativa.
+  `;
 
   try {
-    const base64Audio = await blobToBase64(audioBlob);
-
-    const prompt = `
-      Actúa como un ingeniero de mezcla y masterización experto.
-      Analiza este fragmento de audio monofónico.
-      1. Identifica el género y los instrumentos.
-      2. Sugiere una configuración de mezcla estéreo simulada (panning) para separar frecuencias bajas, medias y altas.
-      3. Dame feedback creativo.
-      
-      Responde SOLO con un objeto JSON.
-    `;
-
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-native-audio-preview-12-2025", // Using appropriate model for audio input
+      model: "gemini-2.5-flash-native-audio-preview-12-2025",
       contents: {
         parts: [
-          {
-            inlineData: {
-              mimeType: audioBlob.type || 'audio/wav',
-              data: base64Audio
-            }
-          },
+          { inlineData: { mimeType: audioBlob.type || 'audio/wav', data: base64Audio } },
           { text: prompt }
         ]
       },
@@ -57,38 +46,62 @@ export const analyzeAudioContent = async (audioBlob: Blob): Promise<TrackAnalysi
           type: Type.OBJECT,
           properties: {
             genre: { type: Type.STRING },
+            bpm: { type: Type.STRING },
+            key: { type: Type.STRING },
             mood: { type: Type.STRING },
-            instruments: { type: Type.ARRAY, items: { type: Type.STRING } },
-            suggestedMix: {
-              type: Type.OBJECT,
-              properties: {
-                bass: { type: Type.NUMBER, description: "Pan value -1 (L) to 1 (R) for low frequencies" },
-                mids: { type: Type.NUMBER, description: "Pan value -1 (L) to 1 (R) for mid frequencies" },
-                highs: { type: Type.NUMBER, description: "Pan value -1 (L) to 1 (R) for high frequencies" },
-                width: { type: Type.NUMBER, description: "Stereo expansion factor 0 to 1" }
-              }
-            },
-            feedback: { type: Type.STRING }
+            technical_summary: { type: Type.STRING },
+            ai_suggestions: { type: Type.STRING },
           }
         }
       }
     });
 
-    if (response.text) {
-        return JSON.parse(response.text) as TrackAnalysis;
-    }
-    
-    throw new Error("No se pudo analizar el audio.");
-
+    if (response.text) return JSON.parse(response.text) as TrackAnalysis;
+    throw new Error("No response text");
   } catch (error) {
-    console.error("Gemini Analysis Error:", error);
-    // Fallback Mock data if API fails or model is overloaded/unavailable
+    console.error(error);
     return {
-      genre: "Desconocido",
-      mood: "Experimental",
-      instruments: ["Audio Detectado"],
-      suggestedMix: { bass: 0, mids: -0.3, highs: 0.3, width: 0.8 },
-      feedback: "No se pudo conectar con el motor de IA. Usando configuración predeterminada."
+      genre: "Detectando...",
+      bpm: "--",
+      key: "--",
+      mood: "Análisis pendiente",
+      technical_summary: "El motor de IA está ocupado. Intenta nuevamente.",
+      ai_suggestions: "Ajusta niveles manualmente."
     };
   }
+};
+
+export const generateSessionReport = async (
+  analysis: TrackAnalysis | null, 
+  tracks: TrackData[], 
+  settings: ExportSettings
+): Promise<string> => {
+    const prompt = `
+      Genera un informe técnico formal en formato Markdown para una sesión de estudio de grabación AIWIS.
+      
+      Detalles de la sesión:
+      Visionario: Armin Salazar San Martin
+      Género: ${analysis?.genre || 'N/A'}
+      BPM/Key: ${analysis?.bpm} / ${analysis?.key}
+      
+      Pistas (Stems):
+      ${tracks.map(t => `- ${t.name}: Vol ${(t.volume*100).toFixed(0)}%, Pan ${t.pan}, ${t.muted ? '(MUTE)' : ''}`).join('\n')}
+      
+      Configuración de Exportación:
+      Formato: ${settings.format.toUpperCase()}
+      Calidad: ${settings.sampleRate}Hz / ${settings.bitDepth}bit
+      Ajuste 440Hz: ${settings.standardPitch ? 'Sí' : 'No'}
+      
+      Crea un resumen ejecutivo elegante y profesional.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt
+        });
+        return response.text || "No se pudo generar el informe.";
+    } catch (e) {
+        return "Error conectando con Gemini para el informe.";
+    }
 };

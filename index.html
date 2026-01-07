@@ -3,26 +3,30 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>StereoGen AI - SimpleData & AIWIS</title>
+    <title>AIWIS Audio Studio - Armin Salazar San Martin</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
         theme: {
           extend: {
             colors: {
-              cyber: {
-                900: '#0a0a12',
-                800: '#14141f',
-                700: '#1f1f2e',
-                600: '#2a2a3d',
-                500: '#6366f1',
-                400: '#818cf8',
+              daw: {
+                bg: '#121214',
+                panel: '#1e1e24',
+                surface: '#272730',
                 accent: '#00f0ff',
-                danger: '#ff003c'
+                secondary: '#ff003c',
+                text: '#e2e8f0',
+                muted: '#64748b',
+                success: '#10b981'
               }
             },
             fontFamily: {
-              mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+              sans: ['Inter', 'system-ui', 'sans-serif'],
+              mono: ['JetBrains Mono', 'Menlo', 'monospace'],
+            },
+            animation: {
+              'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
             }
           }
         }
@@ -30,30 +34,23 @@
     </script>
     <style>
       body {
-        background-color: #0a0a12;
+        background-color: #121214;
         color: #e2e8f0;
       }
-      /* Custom Range Slider Styling */
-      input[type=range] {
-        -webkit-appearance: none; 
-        background: transparent; 
+      /* Custom Scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
       }
-      input[type=range]::-webkit-slider-thumb {
-        -webkit-appearance: none;
-        height: 16px;
-        width: 16px;
-        border-radius: 50%;
-        background: #00f0ff;
-        cursor: pointer;
-        margin-top: -6px; 
-        box-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
+      ::-webkit-scrollbar-track {
+        background: #1e1e24; 
       }
-      input[type=range]::-webkit-slider-runnable-track {
-        width: 100%;
-        height: 4px;
-        cursor: pointer;
-        background: #2a2a3d;
-        border-radius: 2px;
+      ::-webkit-scrollbar-thumb {
+        background: #3f3f4e; 
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #00f0ff; 
       }
     </style>
   <script type="importmap">
