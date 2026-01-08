@@ -2,6 +2,7 @@ export enum AppState {
   IDLE = 'IDLE',
   ANALYZING = 'ANALYZING',
   STUDIO = 'STUDIO',
+  RENDERING = 'RENDERING', // New state for offline processing
   ERROR = 'ERROR'
 }
 

@@ -75,7 +75,7 @@ export const generateSessionReport = async (
   settings: ExportSettings
 ): Promise<string> => {
     const prompt = `
-      Genera un informe técnico de Mastering Espectral para AIWIS.
+      Genera un informe técnico de Mastering Espectral para AIWIS en formato HTML.
       
       Análisis IA:
       - Dominante: ${analysis?.dominant_frequencies}
@@ -86,7 +86,13 @@ export const generateSessionReport = async (
       
       Formato Salida: ${settings.format.toUpperCase()} ${settings.sampleRate}Hz
       
-      Crea un resumen de cómo se ha expandido la imagen estéreo de esta grabación usando mezcla asimétrica.
+      INSTRUCCIONES DE FORMATO:
+      - Usa etiquetas <h3> para títulos.
+      - Usa <ul> y <li> para listas.
+      - Usa <p> para párrafos.
+      - Estiliza con clases de Tailwind CSS si es posible, o manténlo simple y limpio (texto blanco/gris).
+      - Incluye una sección de "Conclusión de Imagen Estéreo" explicando cómo la mezcla asimétrica afectó la amplitud.
+      - NO incluyas markdown, solo código HTML crudo dentro del body.
     `;
 
     try {
@@ -94,8 +100,8 @@ export const generateSessionReport = async (
             model: "gemini-3-flash-preview",
             contents: prompt
         });
-        return response.text || "No se pudo generar el informe.";
+        return response.text || "<p>No se pudo generar el informe.</p>";
     } catch (e) {
-        return "Error conectando con Gemini para el informe.";
+        return "<p>Error conectando con Gemini para el informe.</p>";
     }
 };
