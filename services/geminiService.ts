@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { SpectralAnalysis, FrequencyBand, ExportSettings, InstrumentCategory, INSTRUMENT_FREQUENCY_MAP, DETAILED_FREQUENCY_DICTIONARY } from "../types";
+import { SpectralAnalysis, InstrumentCategory, INSTRUMENT_FREQUENCY_MAP, DETAILED_FREQUENCY_DICTIONARY, FrequencyBand, ExportSettings } from "../types";
 
 const GEMINI_API_KEY = process.env.API_KEY || '';
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
@@ -26,29 +26,34 @@ export const analyzeAudioSession = async (
   const base64Audio = await blobToBase64(audioBlob);
   const instrumentInfo = INSTRUMENT_FREQUENCY_MAP[instrumentCategory];
 
-  // Convert PDF Data to String for the prompt
   const technicalData = JSON.stringify(DETAILED_FREQUENCY_DICTIONARY, null, 2);
+  const availableCategories = Object.keys(INSTRUMENT_FREQUENCY_MAP).filter(k => k !== 'AUTO').join(', ');
 
   const prompt = `
-    Eres un Ingeniero de Audio Experto.
+    Eres un Ingeniero de Audio Experto (AIWIS).
     
     CONOCIMIENTO EXPERTO (TABLA DE FRECUENCIAS):
     ${technicalData}
     
-    AUDIO DE ENTRADA: ${instrumentCategory === 'AUTO' ? 'Detectar Automáticamente' : instrumentInfo.name}
-    DESCRIPCIÓN: ${instrumentInfo.description}
+    MODO ACTUAL: ${instrumentCategory}
     
-    OBJETIVO:
-    Analiza este audio Mono.
-    Cruza la información con la Tabla de Frecuencias provista.
+    TAREA 1: CLASIFICACIÓN
+    Si el modo es 'AUTO' o 'FULL_MIX', escucha atentamente y determina cuál de estas categorías describe mejor el audio: [${availableCategories}]. 
+    Si es una mezcla compleja, mantén 'FULL_MIX'. Si es claramente una batería aislada, sugiere 'DRUMS'.
     
-    Para las 8 bandas (Sub 20-60, Bass 60-250, LowMids 250-500, Mids 500-2k, UpMids 2k-4k, Pres 4k-6k, Brill 6k-10k, Air 10k+):
-    1. Identifica qué componente específico reside ahí (ej: "Caja Deep" en 80Hz, "Voz Aire" en 12kHz).
-    2. Usa EXACTAMENTE los términos de la tabla si aplican (ej: "Muddy", "Boomy", "Crisp").
+    TAREA 2: MAPEO DE FRECUENCIAS (8 BANDAS)
+    Analiza las 8 bandas (Sub 20-60, Bass 60-250, LowMids 250-500, Mids 500-2k, UpMids 2k-4k, Pres 4k-6k, Brill 6k-10k, Air 10k+).
+    Para cada banda:
+    - Si es 'FULL_MIX': Identifica qué instrumento predomina ahí (ej: "Kick/Bass", "Vocal Body", "Snare/Gtr").
+    - Si es Instrumento Único: Identifica características (ej: "Cuerda", "Ataque", "Resonancia").
+    - Usa términos de la tabla (Muddy, Boomy, Crisp) si aplican.
     
     SALIDA JSON:
-    - "detected_instruments_per_band": Mapeo de ID de banda (0 a 7) a la descripción exacta del componente detectado.
-    - "technical_recommendation": Consejo de mezcla basado en la tabla (ej: "Cortar 400Hz en el Bombo para quitar Muddy").
+    - "detected_instruments_per_band": Objeto { "0": "Kick Sub", "1": "Bass Body", ... } mapeando cada banda.
+    - "suggested_mode": La categoría detectada (ej: "DRUMS", "VOCAL_FEMALE").
+    - "technical_recommendation": Consejo de mezcla.
+    - "dominant_frequencies": Rangos dominantes.
+    - "stereo_width_suggestion": Sugerencia de paneo.
   `;
 
   try {
@@ -69,7 +74,8 @@ export const analyzeAudioSession = async (
             stereo_width_suggestion: { type: Type.STRING },
             vibe: { type: Type.STRING },
             technical_recommendation: { type: Type.STRING },
-            detected_instruments_per_band: { type: Type.OBJECT }
+            detected_instruments_per_band: { type: Type.OBJECT },
+            suggested_mode: { type: Type.STRING } // New field
           }
         }
       }
@@ -84,7 +90,8 @@ export const analyzeAudioSession = async (
       stereo_width_suggestion: "Manual",
       vibe: "Unknown",
       technical_recommendation: "Check Levels",
-      detected_instruments_per_band: {}
+      detected_instruments_per_band: {},
+      suggested_mode: instrumentCategory
     };
   }
 };
@@ -92,7 +99,7 @@ export const analyzeAudioSession = async (
 export const generateSessionReport = async (
   analysis: SpectralAnalysis | null, 
   bands: FrequencyBand[], 
-  settings: ExportSettings,
+  settings: ExportSettings, // kept for interface compat
   instrumentCategory: InstrumentCategory
 ): Promise<string> => {
     const instrumentName = INSTRUMENT_FREQUENCY_MAP[instrumentCategory].name;
@@ -100,17 +107,18 @@ export const generateSessionReport = async (
     const prompt = `
       Genera un informe HTML para AIWIS Spectral Stereoizer.
       
-      Instrumento: ${instrumentName}
+      Instrumento Analizado: ${instrumentName}
+      Modo Sugerido por IA: ${analysis?.suggested_mode || 'N/A'}
       
       Análisis Técnico (Basado en Tabla PDF):
       ${analysis?.technical_recommendation}
       
-      Configuración de Stems Exportados:
-      ${bands.map(b => `- ${b.label} [${b.detectedInstrument || b.pdfHint || 'Generico'}]: L:${(b.gainL*100).toFixed(0)}% / R:${(b.gainR*100).toFixed(0)}%`).join('\n')}
+      Detalle de Bandas y Stems:
+      ${bands.map(b => `- ${b.label}: ${b.detectedInstrument} (${b.range[0]}-${b.range[1]}Hz)`).join('\n')}
       
       INSTRUCCIONES:
-      HTML profesional, fondo oscuro, texto claro.
-      Incluye una tabla detallando qué frecuencias se realzaron o cortaron según los "Problemas" y "Efectos" del conocimiento experto (Muddy, Boxy, Presence, etc).
+      HTML profesional, fondo oscuro #121214, texto claro.
+      Tabla comparativa de problemas detectados vs solucionados.
     `;
 
     try {

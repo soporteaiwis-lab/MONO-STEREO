@@ -44,6 +44,7 @@ export interface SpectralAnalysis {
   vibe: string;
   technical_recommendation: string;
   detected_instruments_per_band?: Record<string, string>; // Band ID -> Instrument Name
+  suggested_mode?: InstrumentCategory; // New: AI suggests switching mode
 }
 
 // --- BASE DE DATOS MAESTRA DEL PDF ---

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Activity, Zap, Layers, Server, Settings, Download, FileText, AlertCircle, RefreshCw, Play, Eye, Music, Mic2, Drum, Save } from 'lucide-react';
+import { Upload, Activity, Zap, Layers, Server, Settings, Download, FileText, AlertCircle, RefreshCw, Play, Eye, Music, Mic2, Drum, Save, ArrowRightLeft } from 'lucide-react';
 import { audioEngine } from './services/audioEngine';
 import { analyzeAudioSession, generateSessionReport } from './services/geminiService';
 import { AppState, SpectralAnalysis, FrequencyBand, ExportSettings, SPECTRAL_BANDS_TEMPLATE, BAND_COLORS, InstrumentCategory, INSTRUMENT_FREQUENCY_MAP } from './types';
@@ -67,17 +67,16 @@ const App: React.FC = () => {
   };
 
   // --- LOGICA DE MAPEO PDF PARA BATERIA ---
-  // Mapea las bandas de frecuencia a los rangos específicos del PDF para Batería
   const getDrumHint = (bandIndex: number): { label: string, hint: string } => {
      switch(bandIndex) {
-         case 0: return { label: "KICK SUB", hint: "<80Hz (Deep/Boomy)" };
-         case 1: return { label: "KICK/SNARE", hint: "80-200Hz (Bottom/Body)" };
-         case 2: return { label: "SNARE/TOMS", hint: "300-400Hz (Muddy?)" };
-         case 3: return { label: "MIDS", hint: "1kHz (Annoying?)" };
-         case 4: return { label: "ATTACK", hint: "2-5kHz (Kick/Tom Attack)" };
-         case 5: return { label: "PRESENCE", hint: "5kHz (Snap)" };
-         case 6: return { label: "CYMBALS", hint: "8-12kHz (Brilliance)" };
-         case 7: return { label: "AIR", hint: "15kHz (Air)" };
+         case 0: return { label: "KICK SUB", hint: "Sub Low (<60Hz)" };
+         case 1: return { label: "KICK/SNARE", hint: "Body/Punch (60-250Hz)" };
+         case 2: return { label: "SNARE/TOMS", hint: "Mud/Resonance (250-500Hz)" };
+         case 3: return { label: "SN/TOMS/GTR", hint: "Attack/Mid (500-2k)" };
+         case 4: return { label: "ATTACK", hint: "Snap/Beater (2k-4k)" };
+         case 5: return { label: "PRESENCE", hint: "Wire/Edge (4k-6k)" };
+         case 6: return { label: "CYMBALS", hint: "Brilliance (6k-10k)" };
+         case 7: return { label: "AIR", hint: "Hiss/Air (10k+)" };
          default: return { label: "BAND", hint: "" };
      }
   };
@@ -86,16 +85,28 @@ const App: React.FC = () => {
     setState(AppState.ANALYZING);
 
     try {
+      // 1. AI Analysis
       const aiResults = await analyzeAudioSession(blob, selectedInstrument);
       setAnalysis(aiResults);
 
+      // 2. Auto-Switch Logic
+      let currentMode = selectedInstrument;
+      if (selectedInstrument === 'AUTO' && aiResults.suggested_mode && aiResults.suggested_mode !== 'AUTO') {
+          // Check if valid mode
+          if (INSTRUMENT_FREQUENCY_MAP[aiResults.suggested_mode as InstrumentCategory]) {
+              currentMode = aiResults.suggested_mode as InstrumentCategory;
+              setSelectedInstrument(currentMode); // Update state
+          }
+      }
+
+      // 3. Configure Bands
       const initialBands: FrequencyBand[] = SPECTRAL_BANDS_TEMPLATE.map((t, idx) => {
         let label = t.label;
         let hint = "";
         let detected = "";
 
-        // Apply Drum Specifics from PDF Data Logic
-        if (selectedInstrument === 'DRUMS') {
+        // Apply Drum Specific Labels
+        if (currentMode === 'DRUMS') {
             const drumData = getDrumHint(idx);
             label = drumData.label;
             hint = drumData.hint;
@@ -103,7 +114,6 @@ const App: React.FC = () => {
 
         // Apply AI Detected label
         if (aiResults.detected_instruments_per_band) {
-            // Check index first, then label match
             detected = aiResults.detected_instruments_per_band[idx.toString()] || 
                        aiResults.detected_instruments_per_band[t.label] || "";
         }
@@ -148,8 +158,6 @@ const App: React.FC = () => {
       return newBands;
     });
   };
-
-  // --- EXPORT FUNCTIONS ---
 
   const downloadWav = (buffer: AudioBuffer, filename: string) => {
       const numOfChan = buffer.numberOfChannels;
@@ -216,14 +224,15 @@ const App: React.FC = () => {
       source.start();
   };
 
-  // --- STEM EXPORT ---
   const handleDownloadStem = async (band: FrequencyBand) => {
       setState(AppState.RENDERING);
       try {
           const stemBuffer = await audioEngine.renderSingleBand(band);
-          const name = band.detectedInstrument 
-             ? `${band.detectedInstrument.replace(/ /g, '_')}_${band.label}.wav`
-             : `Stem_${band.label}.wav`;
+          const cleanInstrumentName = band.detectedInstrument 
+             ? band.detectedInstrument.replace(/[^a-zA-Z0-9]/g, '_')
+             : band.label;
+             
+          const name = `AIWIS_Stem_${cleanInstrumentName}_${band.label}.wav`;
           
           downloadWav(stemBuffer, name);
           setState(AppState.STUDIO);
@@ -275,13 +284,13 @@ const App: React.FC = () => {
             <div className="text-center space-y-4">
               <h2 className="text-5xl font-black text-white tracking-tighter">SPECTRAL <span className="text-daw-accent">STEREOIZER</span></h2>
               <p className="text-xl text-daw-muted max-w-2xl mx-auto">
-                Análisis profundo basado en Tabla de Frecuencias Experta (PDF).
+                Sube un audio Mono. AIWIS detectará si es Voz, Batería o Mezcla y configurará el entorno.
               </p>
             </div>
 
             {/* Instrument Selector */}
             <div className="bg-daw-panel border border-daw-surface p-6 rounded-xl w-full max-w-4xl space-y-4">
-               <label className="text-xs font-bold text-daw-accent uppercase tracking-wider block">Selecciona Instrumento para Mapeo de Frecuencias PDF</label>
+               <label className="text-xs font-bold text-daw-accent uppercase tracking-wider block">1. Selecciona Modo (o usa Auto-Detección)</label>
                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   {(Object.keys(INSTRUMENT_FREQUENCY_MAP) as InstrumentCategory[]).map((cat) => (
                       <button
@@ -320,12 +329,12 @@ const App: React.FC = () => {
               <RefreshCw className="h-16 w-16 text-daw-accent animate-spin relative z-10" />
             </div>
             <h2 className="text-2xl font-mono text-white">
-                {state === AppState.ANALYZING ? "ANALIZANDO TABLA DE FRECUENCIAS..." : "RENDERIZANDO STEMS..."}
+                {state === AppState.ANALYZING ? "ANALIZANDO & CLASIFICANDO..." : "RENDERIZANDO STEMS..."}
             </h2>
             {state === AppState.ANALYZING && (
-                <p className="text-daw-muted text-sm font-mono text-center max-w-md">
-                    Consultando base de datos experta para {INSTRUMENT_FREQUENCY_MAP[selectedInstrument].name}...<br/>
-                    Identificando rangos de: {selectedInstrument === 'DRUMS' ? 'Kick, Snare, Toms, Cymbals' : 'Cuerpo, Brillo, Presencia'}
+                <p className="text-daw-muted text-sm font-mono text-center max-w-md animate-pulse">
+                    Consultando tabla de frecuencias...<br/>
+                    Detectando instrumentos en Full Mix...
                 </p>
             )}
           </div>
@@ -343,9 +352,14 @@ const App: React.FC = () => {
                     <div className="flex items-center gap-1"><div className="w-2 h-2 bg-[#ff003c]"></div> R</div>
                  </div>
                  <div className="absolute bottom-2 left-2 flex gap-2">
-                     <span className="px-2 py-1 bg-daw-accent text-black text-[10px] font-bold rounded uppercase">
-                        MODO: {INSTRUMENT_FREQUENCY_MAP[selectedInstrument].name}
+                     <span className="px-2 py-1 bg-daw-accent text-black text-[10px] font-bold rounded uppercase flex items-center gap-2">
+                        MODO ACTIVO: {INSTRUMENT_FREQUENCY_MAP[selectedInstrument].name}
                      </span>
+                     {selectedInstrument === 'DRUMS' && (
+                         <span className="px-2 py-1 bg-daw-surface text-white text-[10px] font-bold rounded uppercase border border-gray-600">
+                             KIT SPLIT HABILITADO
+                         </span>
+                     )}
                  </div>
               </div>
               
@@ -354,14 +368,16 @@ const App: React.FC = () => {
                     <h3 className="flex items-center gap-2 text-white font-bold text-sm mb-3"><Server className="h-4 w-4 text-daw-accent"/> DIAGNÓSTICO EXPERTO</h3>
                     {analysis ? (
                         <div className="space-y-3 text-xs text-gray-400">
-                             <div><span className="text-daw-muted block mb-1">SUGERENCIA STEREO</span><span className="text-daw-accent">{analysis.stereo_width_suggestion}</span></div>
+                            {analysis.suggested_mode && analysis.suggested_mode !== 'AUTO' && (
+                                <div className="p-2 bg-daw-accent/10 border border-daw-accent/30 rounded text-white mb-2">
+                                    <span className="block text-[10px] text-daw-accent mb-1 font-bold uppercase">Auto-Detección:</span>
+                                    Detectado <span className="font-bold">{analysis.suggested_mode}</span>. Entorno reconfigurado.
+                                </div>
+                            )}
+                            <div><span className="text-daw-muted block mb-1">SUGERENCIA STEREO</span><span className="text-daw-accent">{analysis.stereo_width_suggestion}</span></div>
                             <div className="p-2 bg-daw-surface/50 rounded border-l-2 border-daw-accent">
                                 <span className="text-gray-300 block mb-1 font-bold">Recomendación Técnica PDF:</span>
                                 <p className="italic text-[10px]">{analysis.technical_recommendation}</p>
-                            </div>
-                            <div>
-                                <span className="text-daw-muted block mb-1">DOMINANTE</span>
-                                <span className="font-mono text-white">{analysis.dominant_frequencies}</span>
                             </div>
                         </div>
                     ) : null}
@@ -397,12 +413,15 @@ const App: React.FC = () => {
                     <div className="w-full text-center">
                        <h4 className={`text-xs font-black ${band.color}`}>{band.label}</h4>
                        
-                       {/* AI Detected Instrument Label */}
-                       <div className="h-10 flex flex-col justify-center">
+                       {/* AI Detected Instrument Label (THE REQUESTED "SECOND STAGE" VISUAL) */}
+                       <div className="h-10 flex flex-col justify-center items-center w-full">
                            {band.detectedInstrument ? (
-                               <span className="text-[10px] text-white bg-daw-surface px-2 py-0.5 rounded border border-gray-700 block">
-                                   {band.detectedInstrument}
-                               </span>
+                               <div className="flex flex-col items-center w-full animate-fade-in-up">
+                                   <span className="text-[8px] text-gray-500 uppercase tracking-widest mb-0.5">DETECTADO</span>
+                                   <span className="text-[10px] text-black bg-daw-accent font-bold px-2 py-0.5 rounded shadow-lg shadow-daw-accent/20 block w-full truncate">
+                                       {band.detectedInstrument}
+                                   </span>
+                               </div>
                            ) : (
                                <span className="text-[9px] text-gray-600 font-mono">
                                    {band.pdfHint || `${band.range[0]}-${band.range[1]}Hz`}
@@ -413,8 +432,8 @@ const App: React.FC = () => {
                        {/* Stem Download Button */}
                        <button 
                          onClick={() => handleDownloadStem(band)}
-                         className="mt-2 w-full flex items-center justify-center gap-1 bg-gray-800 hover:bg-daw-accent hover:text-black text-[9px] py-1 rounded transition border border-gray-700"
-                         title="Exportar esta banda como archivo separado"
+                         className="mt-2 w-full flex items-center justify-center gap-1 bg-gray-800 hover:bg-daw-accent hover:text-black text-[9px] py-1.5 rounded transition border border-gray-700 font-bold group-hover:border-daw-accent/50"
+                         title={`Exportar Stem: ${band.detectedInstrument || band.label}`}
                        >
                            <Save className="h-3 w-3" /> STEM
                        </button>
