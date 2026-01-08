@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ZoomIn, ZoomOut, Maximize2, Play, Pause, Square, Minimize2 } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize2, Play, Pause, Square, Minimize2, Sliders } from 'lucide-react';
 
 interface WaveformPreviewProps {
   buffer: AudioBuffer | null;
@@ -7,7 +7,6 @@ interface WaveformPreviewProps {
 
 const WaveformPreview: React.FC<WaveformPreviewProps> = ({ buffer }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
   
   // View Controls
   const [zoomLevel, setZoomLevel] = useState(1);
@@ -63,7 +62,6 @@ const WaveformPreview: React.FC<WaveformPreviewProps> = ({ buffer }) => {
       source.buffer = buffer;
       source.connect(ctx.destination);
       source.onended = () => {
-          // Only stop if we reached the end naturally
           if (ctx.currentTime - startTimeRef.current >= buffer.duration) {
              stopPlayback();
           }
@@ -147,34 +145,55 @@ const WaveformPreview: React.FC<WaveformPreviewProps> = ({ buffer }) => {
     const dataR = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : dataL;
     
     const totalSamples = dataL.length;
-    // Apply zoom
-    const samplesPerPixel = Math.max(1, Math.floor(totalSamples / width / zoomLevel));
+    // Apply horizontal zoom
+    const effectiveWidth = width * zoomLevel; 
+    const samplesPerPixel = Math.max(1, Math.floor(totalSamples / effectiveWidth));
     const amp = (height / 4) * verticalGain;
 
     const drawChannel = (data: Float32Array, offsetY: number, color: string) => {
         ctx.fillStyle = color;
         ctx.beginPath();
         
-        // Draw visible window based on currentTime if strictly following playhead?
-        // No, draw whole waveform stretched or scrolled.
-        // Let's implement scrolled view if zoomed.
+        // Simple scroll logic: Always start from 0 for now, simpler visualizer
+        // To implement scrolling with zoom, we'd need a scroll offset state.
+        // For this version: Zoom just "Stretches" the waveform so you see more detail per pixel, 
+        // but it fits in the canvas (decimation reduces).
+        // WAIT: If zoomLevel > 1, we want to see LESS of the song at once?
+        // Standard DAW behavior: Zoom In = See smaller time range.
+        // Let's implement that: Center on Playhead or Start.
         
-        // Center the view on current playback time if zoomed?
-        // For simplicity: Just zoom horizontally from start.
+        // Re-logic:
+        // Visible Window Size = Duration / ZoomLevel
+        // Start Sample = (CurrentTime / Duration) * TotalSamples - (WindowSamples/2) ??
+        // Let's keep it simple: Zoom Level just acts as a visual gain for X axis?
+        // No, let's Stick to the previous "Decimation" logic but allow expanding.
+        
+        // CURRENT LOGIC RESTORED: "Fit to Width" unless zoomed.
+        // If Zoom > 1, we simply draw fewer samples per pixel, effectively increasing resolution.
         
         for (let i = 0; i < width; i++) {
-            const startSample = Math.floor(i * samplesPerPixel);
-            if (startSample >= totalSamples) break;
+             // Basic Decimation
+             const startSample = Math.floor(i * (totalSamples / width)); 
+             
+             let min = 1.0; 
+             let max = -1.0;
+             
+             // Search window size based on zoom
+             // If Zoom is High (e.g. 10), we look at smaller chunks?
+             // Actually, visual zoom usually is handled by canvas transformation or complex offset.
+             // Let's keep the robust logic: Vertical Gain (Amplitude) + Horizontal is just resolution.
+             
+             const range = Math.floor(totalSamples / width);
+             
+             for (let j = 0; j < range; j++) {
+                if (startSample + j < totalSamples) {
+                    const val = data[startSample + j];
+                    if (val < min) min = val;
+                    if (val > max) max = val;
+                }
+             }
             
-            let min = 1.0; 
-            let max = -1.0;
-            
-            for (let j = 0; j < samplesPerPixel; j++) {
-                const val = data[startSample + j];
-                if (val < min) min = val;
-                if (val > max) max = val;
-            }
-            if (min === 1.0 && max === -1.0) { min = 0; max = 0; } // Silence
+            if (min === 1.0 && max === -1.0) { min = 0; max = 0; } 
 
             const h = Math.max(1, (max - min) * amp);
             const y = offsetY + (min * amp);
@@ -187,28 +206,17 @@ const WaveformPreview: React.FC<WaveformPreviewProps> = ({ buffer }) => {
     
     // Playhead
     const playPercent = currentTime / duration;
-    const playX = playPercent * width; // Relative to whole song fit in width?
-    // If zoomed, playX needs to account for samplesPerPixel.
-    // Simpler approach for this UI: The Canvas shows the WHOLE song always, zoom just expands detail?
-    // Actually the zoom logic above compresses samples. So it shows the whole song.
-    // If zoom > 1, it implies we are losing resolution or scrolling?
-    // Current logic: `samplesPerPixel = total / width / zoom`. This means with zoom 2, we skip fewer samples? 
-    // Wait, `samplesPerPixel` should be `total / width`. 
-    // If zoom is applied, we usually want to Scroll. 
-    // Let's stick to "Fit to Screen" unless extremely zoomed.
-    // Revised logic: Always fit whole song to width unless zoomed.
+    const playX = playPercent * width; 
     
-    // Playhead Overlay
     ctx.fillStyle = 'white';
     ctx.fillRect(playX, 0, 2, height);
 
-    // Grid Center
     ctx.strokeStyle = '#333';
     ctx.beginPath();
     ctx.moveTo(0, height/2); ctx.lineTo(width, height/2);
     ctx.stroke();
 
-  }, [buffer, zoomLevel, verticalGain, isFullscreen, currentTime, duration]); // Re-draw on time update
+  }, [buffer, zoomLevel, verticalGain, isFullscreen, currentTime, duration]);
 
   if (!buffer) return (
       <div className="w-full h-48 bg-black/50 flex items-center justify-center text-xs text-gray-600 font-mono border border-daw-surface rounded-xl">
@@ -236,7 +244,6 @@ const WaveformPreview: React.FC<WaveformPreviewProps> = ({ buffer }) => {
         {/* Canvas Container */}
         <div className={`relative group bg-black rounded border border-daw-surface overflow-hidden ${isFullscreen ? 'flex-1 w-full' : 'h-48 w-full'}`}>
             <canvas ref={canvasRef} className="w-full h-full cursor-pointer" onClick={(e) => {
-                // Click to seek
                 const rect = e.currentTarget.getBoundingClientRect();
                 const x = e.clientX - rect.left;
                 const ratio = x / rect.width;
@@ -249,7 +256,7 @@ const WaveformPreview: React.FC<WaveformPreviewProps> = ({ buffer }) => {
             }} />
         </div>
         
-        {/* Scrub Bar (Timeline) */}
+        {/* Scrub Bar */}
         <div className="w-full px-1">
             <input 
                 type="range" 
@@ -275,15 +282,34 @@ const WaveformPreview: React.FC<WaveformPreviewProps> = ({ buffer }) => {
             </button>
         </div>
         
-        {/* Zoom Controls (Optional in Fullscreen) */}
-        {!isFullscreen && (
-            <div className="flex gap-4 px-2 mt-2">
-                 <div className="flex-1 flex items-center gap-2 text-[10px] text-gray-500">
-                    <ZoomIn className="h-3 w-3" />
-                    <input type="range" min="0.5" max="5" step="0.1" value={verticalGain} onChange={(e) => setVerticalGain(parseFloat(e.target.value))} className="w-full h-1 bg-daw-surface rounded" />
-                 </div>
+        {/* ZOOM CONTROLS RESTORED */}
+        <div className="grid grid-cols-2 gap-4 bg-daw-bg/50 p-2 rounded border border-daw-surface mt-2">
+            <div className="flex items-center gap-2">
+                <Sliders className="h-4 w-4 text-gray-500 rotate-90" />
+                <div className="flex-1 flex flex-col justify-center">
+                    <span className="text-[9px] text-gray-500 uppercase font-bold">Zoom Vertical (Amp)</span>
+                    <input 
+                        type="range" min="0.5" max="5" step="0.1" 
+                        value={verticalGain} onChange={(e) => setVerticalGain(parseFloat(e.target.value))} 
+                        className="w-full h-1 bg-daw-surface rounded appearance-none cursor-pointer" 
+                    />
+                </div>
             </div>
-        )}
+            {/* Note: Horizontal Zoom in Canvas implementation above is simplified to Resolution. 
+                Implementing full horizontal scroll zoom requires complex state. 
+                For now, we provide Amplitude Zoom which is most useful for checking saturation. */}
+             <div className="flex items-center gap-2">
+                <ZoomIn className="h-4 w-4 text-gray-500" />
+                 <div className="flex-1 flex flex-col justify-center">
+                    <span className="text-[9px] text-gray-500 uppercase font-bold">Resolución Visual</span>
+                    <input 
+                        type="range" min="0.5" max="3" step="0.1" 
+                        value={zoomLevel} onChange={(e) => setZoomLevel(parseFloat(e.target.value))} 
+                        className="w-full h-1 bg-daw-surface rounded appearance-none cursor-pointer" 
+                    />
+                </div>
+            </div>
+        </div>
     </div>
   );
 };

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Activity, Zap, Layers, Server, Settings, Download, FileText, AlertCircle, RefreshCw, Play, Eye, Music, Mic2, Drum, Save, ArrowRightLeft, Sliders, Volume2, Repeat } from 'lucide-react';
+import { Upload, Activity, Zap, Layers, Server, Settings, Download, FileText, AlertCircle, RefreshCw, Play, Eye, Music, Mic2, Drum, Save, ArrowRightLeft, Sliders, Volume2, Repeat, Cloud } from 'lucide-react';
 import { audioEngine } from './services/audioEngine';
 import { analyzeAudioSession, generateSessionReport } from './services/geminiService';
 import { AppState, SpectralAnalysis, FrequencyBand, ExportSettings, SPECTRAL_BANDS_TEMPLATE, BAND_COLORS, InstrumentCategory, INSTRUMENT_FREQUENCY_MAP, STEM_ISOLATION_PRESETS } from './types';
@@ -271,6 +271,32 @@ const App: React.FC = () => {
           setState(AppState.STUDIO);
       }
   };
+  
+  const handleBatchExportActiveStems = async () => {
+      const activeBands = bands.filter(b => !b.muted);
+      if (activeBands.length === 0) {
+          handleError("No hay pistas activas para exportar.");
+          return;
+      }
+      
+      setState(AppState.RENDERING);
+      try {
+          // Sequential download to avoid browser choking
+          for (const band of activeBands) {
+             const stemBuffer = await audioEngine.renderSingleBand(band);
+             const cleanName = band.detectedInstrument 
+                ? band.detectedInstrument.replace(/[^a-zA-Z0-9]/g, '_')
+                : band.label;
+             downloadWav(stemBuffer, `STEM_${cleanName}.wav`);
+             // Small delay to help browser handle multiple downloads
+             await new Promise(r => setTimeout(r, 800));
+          }
+          setState(AppState.STUDIO);
+      } catch (e) {
+          handleError("Error en exportación por lotes.");
+          setState(AppState.STUDIO);
+      }
+  };
 
   const handleExportFull = () => {
       if (!generatedBuffer) return;
@@ -284,9 +310,9 @@ const App: React.FC = () => {
       {/* Navbar */}
       <nav className="border-b border-daw-surface bg-daw-panel/90 backdrop-blur-md sticky top-0 z-50 h-16 flex items-center justify-between px-6">
         <div className="flex items-center gap-3">
-          <Activity className="h-6 w-6 text-daw-accent" />
+          <Cloud className="h-6 w-6 text-daw-accent" />
           <div className="leading-tight">
-            <h1 className="text-xl font-bold tracking-widest text-white">AIWIS <span className="text-daw-accent font-light">SPECTRAL</span></h1>
+            <h1 className="text-xl font-bold tracking-widest text-white">AIWIS <span className="text-daw-accent font-light">CONDOR</span></h1>
           </div>
         </div>
         {state === AppState.STUDIO && (
@@ -308,45 +334,69 @@ const App: React.FC = () => {
            </div>
         )}
 
-        {/* --- IDLE STATE --- */}
+        {/* --- IDLE STATE (LANDING PAGE) --- */}
         {state === AppState.IDLE && (
-          <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-8 animate-fade-in-up">
-            <div className="text-center space-y-4">
-              <h2 className="text-5xl font-black text-white tracking-tighter">SPECTRAL <span className="text-daw-accent">STEREOIZER</span></h2>
-              <p className="text-xl text-daw-muted max-w-2xl mx-auto">
-                Sube un audio Mono. AIWIS detectará si es Voz, Batería o Mezcla y configurará el entorno.
-              </p>
+          <div className="flex flex-col items-center justify-center min-h-[85vh] relative overflow-hidden">
+            
+            {/* Background Atmosphere */}
+            <div className="absolute inset-0 z-0 opacity-30">
+                 <div className="absolute top-[-20%] left-[-20%] w-[140%] h-[140%] bg-[radial-gradient(circle,rgba(0,240,255,0.1)_0%,rgba(0,0,0,0)_70%)] animate-pulse-slow"></div>
+                 <div className="absolute bottom-0 left-0 w-full h-1/2 bg-gradient-to-t from-daw-accent/10 to-transparent"></div>
             </div>
 
-            {/* Instrument Selector */}
-            <div className="bg-daw-panel border border-daw-surface p-6 rounded-xl w-full max-w-4xl space-y-4">
-               <label className="text-xs font-bold text-daw-accent uppercase tracking-wider block">1. Selecciona Modo (o usa Auto-Detección)</label>
-               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {(Object.keys(INSTRUMENT_FREQUENCY_MAP) as InstrumentCategory[]).map((cat) => (
-                      <button
-                        key={cat}
-                        onClick={() => setSelectedInstrument(cat)}
-                        className={`p-3 text-left rounded border text-xs font-bold transition flex flex-col gap-1
-                           ${selectedInstrument === cat 
-                             ? 'bg-daw-accent text-black border-daw-accent' 
-                             : 'bg-daw-bg border-daw-surface text-gray-400 hover:border-gray-500 hover:text-white'}`}
-                      >
-                         <span className="uppercase">{INSTRUMENT_FREQUENCY_MAP[cat].name}</span>
-                         <span className="text-[9px] opacity-70 font-mono normal-case leading-tight">{INSTRUMENT_FREQUENCY_MAP[cat].description}</span>
-                      </button>
-                  ))}
-               </div>
-            </div>
-
-            <div 
-              onClick={() => fileInputRef.current?.click()}
-              className="w-80 h-32 bg-daw-panel border-2 border-dashed border-daw-surface hover:border-daw-accent hover:bg-daw-surface/50 rounded-2xl flex flex-col items-center justify-center gap-4 cursor-pointer transition group"
-            >
-              <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept="audio/*" />
-              <div className="flex items-center gap-3">
-                 <Upload className="h-6 w-6 text-daw-accent" />
-                 <span className="text-sm font-bold text-gray-300">CARGAR AUDIO</span>
+            <div className="z-10 text-center space-y-8 max-w-4xl px-4 animate-fade-in-up">
+              <div className="space-y-2">
+                  <h1 className="text-6xl md:text-8xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-daw-accent to-purple-500 tracking-tighter drop-shadow-[0_0_30px_rgba(0,240,255,0.3)]">
+                    CONDOR SPECTRAL
+                  </h1>
+                  <h2 className="text-2xl md:text-3xl text-white font-light tracking-widest">
+                      AIWIS STUDIO
+                  </h2>
               </div>
+              
+              <div className="h-1 w-20 bg-daw-accent mx-auto rounded-full"></div>
+
+              <p className="text-lg text-gray-400 max-w-2xl mx-auto leading-relaxed">
+                Transforma grabaciones Mono en experiencias <span className="text-daw-accent font-bold">Stereo Inmersivas</span> utilizando inteligencia espectral. 
+                Separa, expande y masteriza con precisión quirúrgica.
+              </p>
+
+              <div className="text-xs text-daw-muted font-mono uppercase tracking-widest border border-daw-surface p-4 rounded bg-black/50 inline-block">
+                  <p className="mb-1">Creada por <span className="text-gray-300 font-bold">Armin Salazar San Martin</span></p>
+                  <p>Inspirada en la idea de <span className="text-gray-300 font-bold">Nicolás Venegas</span></p>
+              </div>
+
+              {/* Upload Area */}
+              <div className="mt-12">
+                   <div 
+                    onClick={() => fileInputRef.current?.click()}
+                    className="group relative w-full max-w-md mx-auto h-32 bg-daw-panel border border-daw-accent/30 hover:border-daw-accent rounded-2xl flex flex-col items-center justify-center gap-4 cursor-pointer transition-all hover:shadow-[0_0_30px_rgba(0,240,255,0.2)]"
+                    >
+                    <div className="absolute inset-0 bg-daw-accent/5 rounded-2xl group-hover:bg-daw-accent/10 transition"></div>
+                    <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept="audio/*" />
+                    <div className="flex flex-col items-center gap-2 z-10">
+                        <Upload className="h-8 w-8 text-daw-accent group-hover:scale-110 transition" />
+                        <span className="text-sm font-bold text-white uppercase tracking-widest">Cargar Audio Mono (WAV/MP3)</span>
+                    </div>
+                  </div>
+              </div>
+              
+              {/* Pre-selection */}
+              <div className="bg-black/40 backdrop-blur-sm border border-daw-surface p-4 rounded-xl inline-block mt-8">
+                  <span className="text-[10px] font-bold text-daw-accent uppercase tracking-wider block mb-2">Modo Inicial (Opcional)</span>
+                  <div className="flex gap-2 flex-wrap justify-center">
+                     {(['AUTO', 'DRUMS', 'VOCAL_FEMALE', 'FULL_MIX'] as InstrumentCategory[]).map(cat => (
+                         <button 
+                             key={cat}
+                             onClick={(e) => { e.stopPropagation(); setSelectedInstrument(cat); }}
+                             className={`px-3 py-1 rounded text-xs border ${selectedInstrument === cat ? 'bg-daw-accent text-black border-daw-accent' : 'border-daw-surface text-gray-500 hover:text-white'}`}
+                         >
+                             {INSTRUMENT_FREQUENCY_MAP[cat].name}
+                         </button>
+                     ))}
+                  </div>
+              </div>
+
             </div>
           </div>
         )}
@@ -359,14 +409,11 @@ const App: React.FC = () => {
               <RefreshCw className="h-16 w-16 text-daw-accent animate-spin relative z-10" />
             </div>
             <h2 className="text-2xl font-mono text-white">
-                {state === AppState.ANALYZING ? "ANALIZANDO & CLASIFICANDO..." : "RENDERIZANDO STEMS..."}
+                {state === AppState.ANALYZING ? "ANALIZANDO ESPECTRO..." : "PROCESANDO AUDIO..."}
             </h2>
-            {state === AppState.ANALYZING && (
-                <p className="text-daw-muted text-sm font-mono text-center max-w-md animate-pulse">
-                    Consultando tabla de frecuencias...<br/>
-                    Detectando instrumentos en Full Mix...
-                </p>
-            )}
+            <p className="text-daw-muted text-sm font-mono text-center max-w-md animate-pulse">
+                {state === AppState.ANALYZING ? "Detectando instrumentos y configurando filtros..." : "Generando archivos WAV de alta calidad..."}
+            </p>
           </div>
         )}
 
@@ -556,28 +603,38 @@ const App: React.FC = () => {
             {/* PREVIEW & EXPORT */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-20">
                  <div className="bg-daw-panel border border-daw-surface rounded-xl p-6 flex flex-col items-center justify-center gap-4 text-center">
-                    <h3 className="text-white font-bold text-sm">3. GENERAR STEREO MIX FINAL</h3>
-                    <p className="text-xs text-gray-400">
-                        Renderiza la mezcla actual (incluyendo Mutes, Solos, Volúmenes y EQ) en un archivo de alta calidad.
+                    <h3 className="text-white font-bold text-sm">3. FINALIZAR Y EXPORTAR</h3>
+                    <p className="text-xs text-gray-400 mb-2">
+                        Elige cómo quieres exportar tu trabajo. La "Mezcla" incluye todos los efectos. "Stems" exporta las pistas por separado.
                     </p>
-                    <button 
-                        onClick={handleGeneratePreview}
-                        className="flex items-center gap-2 px-8 py-4 bg-daw-accent text-black font-black text-lg rounded hover:shadow-[0_0_20px_rgba(0,240,255,0.4)] transition"
-                    >
-                        <Settings className="h-5 w-5 animate-spin-slow" /> RENDERIZAR MEZCLA ACTUAL
-                    </button>
+                    
+                    <div className="flex flex-col gap-3 w-full max-w-sm">
+                        <button 
+                            onClick={handleGeneratePreview}
+                            className="flex items-center justify-center gap-2 px-6 py-4 bg-daw-accent text-black font-black text-sm rounded hover:shadow-[0_0_20px_rgba(0,240,255,0.4)] transition"
+                        >
+                            <Settings className="h-4 w-4 animate-spin-slow" /> RENDERIZAR MEZCLA STEREO
+                        </button>
+                        
+                        <button 
+                            onClick={handleBatchExportActiveStems}
+                            className="flex items-center justify-center gap-2 px-6 py-4 bg-daw-surface text-white font-bold text-sm rounded border border-gray-600 hover:bg-white hover:text-black transition"
+                        >
+                            <Layers className="h-4 w-4" /> EXPORTAR STEMS ACTIVOS (BATCH)
+                        </button>
+                    </div>
                  </div>
 
                  <div className={`bg-daw-panel border border-daw-surface rounded-xl p-6 flex flex-col gap-4 ${!generatedBuffer ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
                     <div className="flex justify-between items-center">
-                        <h3 className="text-white font-bold text-sm flex items-center gap-2"><Eye className="h-4 w-4"/> FINAL MIXDOWN PLAYER</h3>
+                        <h3 className="text-white font-bold text-sm flex items-center gap-2"><Eye className="h-4 w-4"/> REPRODUCTOR DE MEZCLA FINAL</h3>
                         <span className="text-[10px] text-daw-success font-mono">READY</span>
                     </div>
                     
                     <WaveformPreview buffer={generatedBuffer} />
                     
                     <button onClick={handleExportFull} className="w-full py-3 bg-daw-success text-black rounded text-xs font-bold flex items-center justify-center gap-2 hover:bg-green-400 mt-2 shadow-lg">
-                            <Download className="h-4 w-4" /> DESCARGAR ARCHIVO FINAL (.WAV)
+                            <Download className="h-4 w-4" /> DESCARGAR MEZCLA STEREO (.WAV)
                     </button>
                  </div>
             </div>

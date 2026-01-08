@@ -1,5 +1,5 @@
 {
-  "name": "AIWIS Spectral Stereoizer",
+  "name": "AIWIS - CONDOR SPECTRAL",
   "description": "Transforma audio Mono en Stereo Real mediante manipulación de espectro de frecuencias. Visionario: Armin Salazar San Martin.",
   "requestFramePermissions": [
     "microphone"
