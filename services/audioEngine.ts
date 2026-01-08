@@ -11,8 +11,10 @@ export class AudioEngine {
 
   // Real-time nodes
   private sourceNode: AudioBufferSourceNode | null = null;
+  private inputGainNode: GainNode | null = null; // Input Volume
+  private masterGainNode: GainNode | null = null; // Output Volume
   private masterCompressor: DynamicsCompressorNode | null = null;
-  private masterGain: GainNode | null = null;
+  
   private splitterNode: ChannelSplitterNode | null = null;
   private analyserL: AnalyserNode | null = null;
   private analyserR: AnalyserNode | null = null;
@@ -26,6 +28,10 @@ export class AudioEngine {
   private startTime: number = 0;
   private pauseTime: number = 0;
   private isPlaying: boolean = false;
+  
+  // Volume States (0-1.5)
+  private inputVolume: number = 1.0;
+  private outputVolume: number = 1.0;
 
   initContext() {
     if (!this.audioContext) {
@@ -38,6 +44,10 @@ export class AudioEngine {
 
   get duration() {
     return this.decodedBuffer?.duration || 0;
+  }
+  
+  get isStereo() {
+      return this.decodedBuffer ? this.decodedBuffer.numberOfChannels > 1 : false;
   }
 
   get currentTime() {
@@ -59,6 +69,16 @@ export class AudioEngine {
     // 2. Setup Graph
     this.setupRealtimeGraph(bands);
   }
+  
+  setInputVolume(val: number) {
+      this.inputVolume = val;
+      if (this.inputGainNode) this.inputGainNode.gain.setTargetAtTime(val, this.audioContext!.currentTime, 0.05);
+  }
+  
+  setOutputVolume(val: number) {
+      this.outputVolume = val;
+      if (this.masterGainNode) this.masterGainNode.gain.setTargetAtTime(val, this.audioContext!.currentTime, 0.05);
+  }
 
   private setupRealtimeGraph(bands: FrequencyBand[]) {
     if (!this.audioContext || !this.decodedBuffer) return;
@@ -66,40 +86,47 @@ export class AudioEngine {
     // Disconnect old
     if (this.sourceNode) { try { this.sourceNode.stop(); } catch {} }
 
-    // Create Source (Buffer)
+    // Create Chain: Source -> InputGain -> [Bands] -> MasterGain -> Compressor -> Destination
+    this.inputGainNode = this.audioContext.createGain();
+    this.inputGainNode.gain.value = this.inputVolume;
+    
+    this.masterGainNode = this.audioContext.createGain();
+    this.masterGainNode.gain.value = this.outputVolume;
+
     this.masterCompressor = this.audioContext.createDynamicsCompressor();
     this.masterCompressor.threshold.value = -10;
     this.masterCompressor.ratio.value = 12;
-    this.masterGain = this.audioContext.createGain();
 
-    // Analysis for Visualizer
+    // Analysis for Visualizer (Post Master)
     this.splitterNode = this.audioContext.createChannelSplitter(2);
     this.analyserL = this.audioContext.createAnalyser();
     this.analyserR = this.audioContext.createAnalyser();
     this.analyserL.fftSize = 2048; 
     this.analyserR.fftSize = 2048;
     
-    this.masterGain.connect(this.masterCompressor);
+    // Connect End of Chain
+    this.masterGainNode.connect(this.masterCompressor);
     this.masterCompressor.connect(this.audioContext.destination);
     
-    this.masterGain.connect(this.splitterNode);
+    // Visualize Output
+    this.masterGainNode.connect(this.splitterNode);
     this.splitterNode.connect(this.analyserL, 0);
     this.splitterNode.connect(this.analyserR, 1);
   }
 
   // Called every time play() is triggered
   private buildAndConnectSource(bands: FrequencyBand[], offset: number) {
-      if (!this.audioContext || !this.decodedBuffer || !this.masterGain) return;
+      if (!this.audioContext || !this.decodedBuffer || !this.inputGainNode || !this.masterGainNode) return;
 
       this.sourceNode = this.audioContext.createBufferSource();
       this.sourceNode.buffer = this.decodedBuffer;
 
-      // We need a common input bus for the bands
-      const inputSplitter = this.audioContext.createGain();
-      this.sourceNode.connect(inputSplitter);
+      this.sourceNode.connect(this.inputGainNode);
 
+      // We need a common input bus for the bands
+      // The Bands take InputGain, process, and connect to MasterGain
       bands.forEach(band => {
-          this.createBandNodes(this.audioContext!, inputSplitter, this.masterGain!, band, true);
+          this.createBandNodes(this.audioContext!, this.inputGainNode!, this.masterGainNode!, band, true);
       });
 
       this.sourceNode.start(0, offset);
@@ -115,10 +142,9 @@ export class AudioEngine {
       band: FrequencyBand,
       isRealTime: boolean
   ) {
-    // 1. Input Gain
-    const inputGain = ctx.createGain();
-    
+    // 1. Input Gain (Band specific, not currently used, but good for structure)
     // 2. Filter Bank (Isolation)
+    // Using 4th order Linkwitz-Riley crossover simulation (2x 2nd order)
     const lowCut1 = ctx.createBiquadFilter();
     lowCut1.type = 'highpass';
     lowCut1.frequency.value = band.range[0];
@@ -150,8 +176,7 @@ export class AudioEngine {
     const merger = ctx.createChannelMerger(2);
 
     // Connections
-    inputNode.connect(inputGain);
-    inputGain.connect(lowCut1);
+    inputNode.connect(lowCut1);
     lowCut1.connect(lowCut2);
     lowCut2.connect(highCut1);
     highCut1.connect(highCut2);
@@ -245,19 +270,22 @@ export class AudioEngine {
       const source = offlineCtx.createBufferSource();
       source.buffer = this.decodedBuffer;
       
-      const inputSplitter = offlineCtx.createGain();
-      const master = offlineCtx.createGain();
+      const inputGain = offlineCtx.createGain();
+      inputGain.gain.value = this.inputVolume;
+
+      const masterGain = offlineCtx.createGain();
+      masterGain.gain.value = this.outputVolume;
       
       const compressor = offlineCtx.createDynamicsCompressor();
       compressor.threshold.value = -10;
       compressor.ratio.value = 12;
 
-      source.connect(inputSplitter);
-      master.connect(compressor);
+      source.connect(inputGain);
+      masterGain.connect(compressor);
       compressor.connect(offlineCtx.destination);
 
       bands.forEach(band => {
-          this.createBandNodes(offlineCtx, inputSplitter, master, band, false);
+          this.createBandNodes(offlineCtx, inputGain, masterGain, band, false);
       });
 
       source.start(0);
@@ -277,14 +305,18 @@ export class AudioEngine {
     const source = offlineCtx.createBufferSource();
     source.buffer = this.decodedBuffer;
     
-    const inputSplitter = offlineCtx.createGain();
-    const master = offlineCtx.createGain(); // Direct to master, no comp for stems? Or light comp? Let's keep consistent.
-    
-    source.connect(inputSplitter);
-    master.connect(offlineCtx.destination);
+    // Apply gains for export
+    const inputGain = offlineCtx.createGain();
+    inputGain.gain.value = this.inputVolume;
+
+    const masterGain = offlineCtx.createGain();
+    masterGain.gain.value = this.outputVolume;
+
+    source.connect(inputGain);
+    masterGain.connect(offlineCtx.destination);
 
     // Create ONLY the target band chain
-    this.createBandNodes(offlineCtx, inputSplitter, master, targetBand, false);
+    this.createBandNodes(offlineCtx, inputGain, masterGain, targetBand, false);
 
     source.start(0);
     return await offlineCtx.startRendering();

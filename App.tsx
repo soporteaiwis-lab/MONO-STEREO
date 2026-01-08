@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Activity, Zap, Layers, Server, Settings, Download, FileText, AlertCircle, RefreshCw, Play, Eye, Music, Mic2, Drum, Save, ArrowRightLeft } from 'lucide-react';
+import { Upload, Activity, Zap, Layers, Server, Settings, Download, FileText, AlertCircle, RefreshCw, Play, Eye, Music, Mic2, Drum, Save, ArrowRightLeft, Sliders, Volume2 } from 'lucide-react';
 import { audioEngine } from './services/audioEngine';
 import { analyzeAudioSession, generateSessionReport } from './services/geminiService';
-import { AppState, SpectralAnalysis, FrequencyBand, ExportSettings, SPECTRAL_BANDS_TEMPLATE, BAND_COLORS, InstrumentCategory, INSTRUMENT_FREQUENCY_MAP } from './types';
+import { AppState, SpectralAnalysis, FrequencyBand, ExportSettings, SPECTRAL_BANDS_TEMPLATE, BAND_COLORS, InstrumentCategory, INSTRUMENT_FREQUENCY_MAP, STEM_ISOLATION_PRESETS } from './types';
 import Visualizer from './components/Visualizer';
 import WaveformPreview from './components/WaveformPreview';
 import Fader from './components/Fader';
@@ -17,10 +17,15 @@ const App: React.FC = () => {
   const [analysis, setAnalysis] = useState<SpectralAnalysis | null>(null);
   const [selectedInstrument, setSelectedInstrument] = useState<InstrumentCategory>('AUTO');
   
+  // Master Volumes
+  const [inputVol, setInputVol] = useState(1.0);
+  const [outputVol, setOutputVol] = useState(1.0);
+
   // Studio
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [isStereoInput, setIsStereoInput] = useState(false);
 
   // Buffer
   const [generatedBuffer, setGeneratedBuffer] = useState<AudioBuffer | null>(null);
@@ -48,6 +53,15 @@ const App: React.FC = () => {
     }
     return () => cancelAnimationFrame(timeRef.current);
   }, [isPlaying]);
+
+  // Master Volume Effects
+  useEffect(() => {
+      audioEngine.setInputVolume(inputVol);
+  }, [inputVol]);
+
+  useEffect(() => {
+      audioEngine.setOutputVolume(outputVol);
+  }, [outputVol]);
 
   const handleError = (msg: string) => {
     setErrorMessage(msg);
@@ -135,6 +149,7 @@ const App: React.FC = () => {
       setBands(initialBands);
       await audioEngine.loadAudio(blob, initialBands);
       setDuration(audioEngine.duration);
+      setIsStereoInput(audioEngine.isStereo);
 
       setState(AppState.STUDIO);
     } catch (e) {
@@ -157,6 +172,24 @@ const App: React.FC = () => {
 
       return newBands;
     });
+  };
+
+  const applyStemPreset = (presetKey: string) => {
+      const preset = STEM_ISOLATION_PRESETS[presetKey];
+      if (!preset) return;
+
+      const newBands = bands.map((band, idx) => {
+          const isActive = preset.activeBands.includes(idx);
+          return {
+              ...band,
+              solo: isActive, // Solo the bands for this instrument
+              muted: false
+          };
+      });
+      
+      setBands(newBands);
+      // Apply updates to audio engine
+      newBands.forEach(b => audioEngine.updateBandParams(b, true));
   };
 
   const downloadWav = (buffer: AudioBuffer, filename: string) => {
@@ -343,17 +376,29 @@ const App: React.FC = () => {
         {/* --- STUDIO STATE --- */}
         {state === AppState.STUDIO && (
           <div className="space-y-6">
+
+             {/* STEREO ALERT */}
+             {isStereoInput && (
+                 <div className="bg-yellow-500/10 border border-yellow-500/50 rounded-lg p-3 flex items-center gap-3 animate-pulse">
+                     <AlertCircle className="h-5 w-5 text-yellow-500" />
+                     <div className="text-xs">
+                         <span className="font-bold text-yellow-400 block">¡FUENTE ESTÉREO DETECTADA!</span>
+                         El audio cargado ya tiene 2 canales. El procesamiento mantendrá la imagen original pero puedes alterar el paneo por bandas.
+                     </div>
+                 </div>
+             )}
             
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 h-[320px]">
-              <div className="xl:col-span-2 bg-daw-panel border border-daw-surface rounded-lg p-1 relative shadow-2xl overflow-hidden">
+              <div className="xl:col-span-2 bg-daw-panel border border-daw-surface rounded-lg p-1 relative shadow-2xl overflow-hidden flex flex-col">
                  <Visualizer isPlaying={isPlaying} />
+                 
                  <div className="absolute top-2 right-2 flex gap-4 text-[10px] font-mono bg-black/50 p-2 rounded">
                     <div className="flex items-center gap-1"><div className="w-2 h-2 bg-[#00f0ff]"></div> L</div>
                     <div className="flex items-center gap-1"><div className="w-2 h-2 bg-[#ff003c]"></div> R</div>
                  </div>
                  <div className="absolute bottom-2 left-2 flex gap-2">
                      <span className="px-2 py-1 bg-daw-accent text-black text-[10px] font-bold rounded uppercase flex items-center gap-2">
-                        MODO ACTIVO: {INSTRUMENT_FREQUENCY_MAP[selectedInstrument].name}
+                        MODO: {INSTRUMENT_FREQUENCY_MAP[selectedInstrument].name}
                      </span>
                      {selectedInstrument === 'DRUMS' && (
                          <span className="px-2 py-1 bg-daw-surface text-white text-[10px] font-bold rounded uppercase border border-gray-600">
@@ -397,76 +442,117 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* MIXER */}
-            <div className="bg-daw-panel border-t border-daw-surface p-6 shadow-2xl overflow-x-auto pb-12">
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-2">
-                    {selectedInstrument === 'DRUMS' ? <Drum className="h-5 w-5 text-daw-accent"/> : <Layers className="h-5 w-5 text-daw-muted" />}
-                    <h3 className="font-bold text-white tracking-widest text-sm">
-                        {selectedInstrument === 'DRUMS' ? 'SEPARADOR DE PIEZAS DE BATERÍA (KIT SPLIT)' : 'CONSOLA DE FRECUENCIAS DETALLADA'}
-                    </h3>
+            {/* STAGE 2: STEM SEPARATION (MOISES STYLE) */}
+            <div className="bg-daw-panel border border-daw-surface rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-4">
+                    <Layers className="h-5 w-5 text-daw-accent"/>
+                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">Etapa 2: Separación de Stems (Virtual)</h3>
                 </div>
-              </div>
-              <div className="flex gap-2 min-w-max justify-between">
-                {bands.map(band => (
-                  <div key={band.id} className="w-[170px] bg-daw-bg border border-daw-surface rounded-lg p-3 flex flex-col items-center gap-3 relative group hover:border-daw-accent/30 transition-colors">
-                    <div className="w-full text-center">
-                       <h4 className={`text-xs font-black ${band.color}`}>{band.label}</h4>
-                       
-                       {/* AI Detected Instrument Label (THE REQUESTED "SECOND STAGE" VISUAL) */}
-                       <div className="h-10 flex flex-col justify-center items-center w-full">
-                           {band.detectedInstrument ? (
-                               <div className="flex flex-col items-center w-full animate-fade-in-up">
-                                   <span className="text-[8px] text-gray-500 uppercase tracking-widest mb-0.5">DETECTADO</span>
-                                   <span className="text-[10px] text-black bg-daw-accent font-bold px-2 py-0.5 rounded shadow-lg shadow-daw-accent/20 block w-full truncate">
-                                       {band.detectedInstrument}
-                                   </span>
-                               </div>
-                           ) : (
-                               <span className="text-[9px] text-gray-600 font-mono">
-                                   {band.pdfHint || `${band.range[0]}-${band.range[1]}Hz`}
-                               </span>
-                           )}
-                       </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+                    {Object.keys(STEM_ISOLATION_PRESETS).map(key => (
+                        <button
+                            key={key}
+                            onClick={() => applyStemPreset(key)}
+                            className="bg-daw-surface hover:bg-daw-accent hover:text-black text-xs font-bold py-3 rounded border border-daw-panel transition flex flex-col items-center justify-center gap-1 group"
+                        >
+                            <span className="text-[10px] opacity-50 group-hover:opacity-100">AISLAR</span>
+                            {STEM_ISOLATION_PRESETS[key].name}
+                        </button>
+                    ))}
+                    <button
+                        onClick={() => {
+                            setBands(bands.map(b => ({...b, solo: false, muted: false})));
+                            bands.forEach(b => audioEngine.updateBandParams({...b, solo: false, muted: false}, false));
+                        }}
+                         className="bg-red-500/20 hover:bg-red-500 text-red-500 hover:text-white border border-red-500/50 text-xs font-bold py-3 rounded transition"
+                    >
+                        RESET (FULL MIX)
+                    </button>
+                </div>
+            </div>
 
-                       {/* Stem Download Button */}
-                       <button 
-                         onClick={() => handleDownloadStem(band)}
-                         className="mt-2 w-full flex items-center justify-center gap-1 bg-gray-800 hover:bg-daw-accent hover:text-black text-[9px] py-1.5 rounded transition border border-gray-700 font-bold group-hover:border-daw-accent/50"
-                         title={`Exportar Stem: ${band.detectedInstrument || band.label}`}
-                       >
-                           <Save className="h-3 w-3" /> STEM
-                       </button>
-                    </div>
-
-                    <div className="flex justify-center gap-1 w-full mt-2">
-                       <button onClick={() => updateBand(band.id, { muted: !band.muted })} className={`flex-1 py-1 text-[10px] font-bold rounded ${band.muted ? 'bg-daw-surface text-gray-500' : 'bg-daw-surface text-gray-300 hover:bg-gray-700'}`}>M</button>
-                       <button onClick={() => updateBand(band.id, { solo: !band.solo })} className={`flex-1 py-1 text-[10px] font-bold rounded ${band.solo ? 'bg-yellow-400 text-black' : 'bg-daw-surface text-gray-300 hover:bg-gray-700'}`}>S</button>
-                    </div>
-
-                    <div className="w-full h-[1px] bg-daw-surface my-1"></div>
-
-                    <div className="flex justify-between w-full gap-2 px-1">
-                      <div className="flex flex-col items-center gap-1">
-                        <span className="text-[9px] font-bold text-[#00f0ff]">L</span>
-                        <Fader value={band.gainL} min={0} max={1.5} step={0.01} onChange={(v) => updateBand(band.id, { gainL: v })} height="h-28" colorClass="bg-[#00f0ff]" />
-                      </div>
-                      <div className="w-[1px] bg-daw-surface h-28 self-center"></div>
-                      <div className="flex flex-col items-center gap-1">
-                        <span className="text-[9px] font-bold text-[#ff003c]">R</span>
-                        <Fader value={band.gainR} min={0} max={1.5} step={0.01} onChange={(v) => updateBand(band.id, { gainR: v })} height="h-28" colorClass="bg-[#ff003c]" />
-                      </div>
-                    </div>
+            {/* MIXER */}
+            <div className="bg-daw-panel border-t border-daw-surface p-6 shadow-2xl overflow-x-auto pb-6">
+              
+              <div className="flex gap-4">
+                  
+                  {/* MASTER INPUT */}
+                  <div className="w-20 bg-daw-bg border border-daw-surface rounded-lg p-2 flex flex-col items-center justify-between py-4">
+                      <span className="text-[9px] text-gray-400 font-bold">INPUT</span>
+                      <Fader value={inputVol} min={0} max={2} step={0.01} onChange={setInputVol} height="h-32" colorClass="bg-green-500" />
+                      <span className="text-[9px] font-mono">{inputVol.toFixed(2)}</span>
                   </div>
-                ))}
+
+                  {/* BANDS */}
+                  <div className="flex gap-2 min-w-max">
+                    {bands.map(band => (
+                    <div key={band.id} className="w-[170px] bg-daw-bg border border-daw-surface rounded-lg p-3 flex flex-col items-center gap-3 relative group hover:border-daw-accent/30 transition-colors">
+                        <div className="w-full text-center">
+                        <h4 className={`text-xs font-black ${band.color}`}>{band.label}</h4>
+                        
+                        {/* AI Detected Instrument Label */}
+                        <div className="h-10 flex flex-col justify-center items-center w-full">
+                            {band.detectedInstrument ? (
+                                <div className="flex flex-col items-center w-full animate-fade-in-up">
+                                    <span className="text-[8px] text-gray-500 uppercase tracking-widest mb-0.5">DETECTADO</span>
+                                    <span className="text-[10px] text-black bg-daw-accent font-bold px-2 py-0.5 rounded shadow-lg shadow-daw-accent/20 block w-full truncate">
+                                        {band.detectedInstrument}
+                                    </span>
+                                </div>
+                            ) : (
+                                <span className="text-[9px] text-gray-600 font-mono">
+                                    {band.pdfHint || `${band.range[0]}-${band.range[1]}Hz`}
+                                </span>
+                            )}
+                        </div>
+
+                        {/* Stem Download Button */}
+                        <button 
+                            onClick={() => handleDownloadStem(band)}
+                            className="mt-2 w-full flex items-center justify-center gap-1 bg-gray-800 hover:bg-daw-accent hover:text-black text-[9px] py-1.5 rounded transition border border-gray-700 font-bold group-hover:border-daw-accent/50"
+                            title={`Exportar Stem: ${band.detectedInstrument || band.label}`}
+                        >
+                            <Save className="h-3 w-3" /> STEM
+                        </button>
+                        </div>
+
+                        <div className="flex justify-center gap-1 w-full mt-2">
+                        <button onClick={() => updateBand(band.id, { muted: !band.muted })} className={`flex-1 py-1 text-[10px] font-bold rounded ${band.muted ? 'bg-daw-surface text-gray-500' : 'bg-daw-surface text-gray-300 hover:bg-gray-700'}`}>M</button>
+                        <button onClick={() => updateBand(band.id, { solo: !band.solo })} className={`flex-1 py-1 text-[10px] font-bold rounded ${band.solo ? 'bg-yellow-400 text-black' : 'bg-daw-surface text-gray-300 hover:bg-gray-700'}`}>S</button>
+                        </div>
+
+                        <div className="w-full h-[1px] bg-daw-surface my-1"></div>
+
+                        <div className="flex justify-between w-full gap-2 px-1">
+                        <div className="flex flex-col items-center gap-1">
+                            <span className="text-[9px] font-bold text-[#00f0ff]">L</span>
+                            <Fader value={band.gainL} min={0} max={1.5} step={0.01} onChange={(v) => updateBand(band.id, { gainL: v })} height="h-28" colorClass="bg-[#00f0ff]" />
+                        </div>
+                        <div className="w-[1px] bg-daw-surface h-28 self-center"></div>
+                        <div className="flex flex-col items-center gap-1">
+                            <span className="text-[9px] font-bold text-[#ff003c]">R</span>
+                            <Fader value={band.gainR} min={0} max={1.5} step={0.01} onChange={(v) => updateBand(band.id, { gainR: v })} height="h-28" colorClass="bg-[#ff003c]" />
+                        </div>
+                        </div>
+                    </div>
+                    ))}
+                  </div>
+
+                  {/* MASTER OUTPUT */}
+                  <div className="w-24 bg-daw-panel border border-l-4 border-daw-surface rounded-lg p-2 flex flex-col items-center justify-between py-4 ml-4 shadow-xl">
+                      <span className="text-[9px] text-white font-bold flex items-center gap-1"><Volume2 className="h-3 w-3"/> MASTER</span>
+                      <Fader value={outputVol} min={0} max={1.5} step={0.01} onChange={setOutputVol} height="h-32" colorClass="bg-daw-secondary" />
+                      <span className="text-[9px] font-mono text-daw-secondary">{outputVol.toFixed(2)}</span>
+                  </div>
+
               </div>
             </div>
 
             {/* PREVIEW & EXPORT */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-20">
                  <div className="bg-daw-panel border border-daw-surface rounded-xl p-6 flex flex-col items-center justify-center gap-4 text-center">
-                    <h3 className="text-white font-bold text-sm">1. GENERAR STEREO MIX</h3>
-                    <p className="text-xs text-gray-400">Renderiza todos los cambios para escuchar el resultado final.</p>
+                    <h3 className="text-white font-bold text-sm">3. GENERAR STEREO MIX FINAL</h3>
+                    <p className="text-xs text-gray-400">Renderiza todos los cambios de EQ, Paneo y Volumen.</p>
                     <button 
                         onClick={handleGeneratePreview}
                         className="flex items-center gap-2 px-8 py-4 bg-daw-accent text-black font-black text-lg rounded hover:shadow-[0_0_20px_rgba(0,240,255,0.4)] transition"

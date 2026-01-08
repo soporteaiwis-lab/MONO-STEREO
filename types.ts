@@ -45,7 +45,18 @@ export interface SpectralAnalysis {
   technical_recommendation: string;
   detected_instruments_per_band?: Record<string, string>; // Band ID -> Instrument Name
   suggested_mode?: InstrumentCategory; // New: AI suggests switching mode
+  is_stereo_source?: boolean;
 }
+
+// Presets para simular separación de Stems (Moises-style via EQ)
+export const STEM_ISOLATION_PRESETS: Record<string, { name: string, activeBands: number[] }> = {
+    VOCALS: { name: "Voz / Vocals", activeBands: [3, 4, 5] }, // Mids, UpMids, Presence
+    BASS: { name: "Bajo / Sub", activeBands: [0, 1] }, // Sub, Bass
+    DRUMS_KICK: { name: "Bombo (Kick)", activeBands: [0, 1, 4] }, // Sub, Bass, Attack
+    DRUMS_SNARE: { name: "Caja (Snare)", activeBands: [2, 3, 5] }, // LowMids, Mids, Pres
+    GUITARS: { name: "Guitarras", activeBands: [2, 3, 4] }, // LowMids to UpMids
+    CYMBALS: { name: "Platillos / Aire", activeBands: [6, 7] } // Brilliance, Air
+};
 
 // --- BASE DE DATOS MAESTRA DEL PDF ---
 export const DETAILED_FREQUENCY_DICTIONARY = {
