@@ -10,8 +10,8 @@ export interface FrequencyBand {
   label: string;
   range: [number, number]; // Min Hz - Max Hz
   centerFreq: number; // For label display
-  volume: number; // 0 to 1.5
-  pan: number; // -1 to 1
+  gainL: number; // 0 to 1.5 (Left Channel Volume)
+  gainR: number; // 0 to 1.5 (Right Channel Volume)
   muted: boolean;
   solo: boolean;
   color: string;
@@ -41,7 +41,7 @@ export interface SpectralAnalysis {
 }
 
 // Bandas de frecuencia estándar para ingeniería de audio
-export const SPECTRAL_BANDS_TEMPLATE: Omit<FrequencyBand, 'id' | 'volume' | 'pan' | 'muted' | 'solo'>[] = [
+export const SPECTRAL_BANDS_TEMPLATE: Omit<FrequencyBand, 'id' | 'gainL' | 'gainR' | 'muted' | 'solo'>[] = [
   { label: 'SUB LOW', range: [20, 60], centerFreq: 40, color: 'text-purple-500' },
   { label: 'BASS', range: [60, 250], centerFreq: 150, color: 'text-indigo-500' },
   { label: 'LOW MIDS', range: [250, 500], centerFreq: 375, color: 'text-blue-500' },

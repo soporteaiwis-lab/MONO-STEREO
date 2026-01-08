@@ -81,12 +81,12 @@ export const generateSessionReport = async (
       - Dominante: ${analysis?.dominant_frequencies}
       - Sugerencia Stereo: ${analysis?.stereo_width_suggestion}
       
-      Configuración de Bandas (Spectral Map):
-      ${bands.map(b => `- ${b.label} (${b.range[0]}-${b.range[1]}Hz): Pan ${b.pan}, Vol ${b.volume}`).join('\n')}
+      Configuración de Bandas (Spectral Map Dual Channel):
+      ${bands.map(b => `- ${b.label} (${b.range[0]}-${b.range[1]}Hz): L:${(b.gainL*100).toFixed(0)}% / R:${(b.gainR*100).toFixed(0)}%`).join('\n')}
       
       Formato Salida: ${settings.format.toUpperCase()} ${settings.sampleRate}Hz
       
-      Crea un resumen de cómo se ha expandido la imagen estéreo de esta grabación.
+      Crea un resumen de cómo se ha expandido la imagen estéreo de esta grabación usando mezcla asimétrica.
     `;
 
     try {

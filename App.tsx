@@ -4,7 +4,6 @@ import { audioEngine } from './services/audioEngine';
 import { analyzeAudioSession, generateSessionReport } from './services/geminiService';
 import { AppState, SpectralAnalysis, FrequencyBand, ExportSettings, SPECTRAL_BANDS_TEMPLATE } from './types';
 import Visualizer from './components/Visualizer';
-import Knob from './components/Knob';
 import Fader from './components/Fader';
 import Transport from './components/Transport';
 
@@ -74,8 +73,8 @@ const App: React.FC = () => {
     const initialBands: FrequencyBand[] = SPECTRAL_BANDS_TEMPLATE.map((t, idx) => ({
       ...t,
       id: `band_${idx}`,
-      volume: 1.0,
-      pan: 0, // Start centered
+      gainL: 1.0, // Default gain
+      gainR: 1.0, // Default gain
       muted: false,
       solo: false
     }));
@@ -188,7 +187,7 @@ const App: React.FC = () => {
               <RefreshCw className="h-16 w-16 text-daw-accent animate-spin relative z-10" />
             </div>
             <h2 className="text-2xl font-mono text-white">DIVIDIENDO ESPECTRO...</h2>
-            <p className="text-daw-muted text-sm">Creando crossovers de frecuencia y asignando filtros.</p>
+            <p className="text-daw-muted text-sm">Creando crossovers de frecuencia y asignando canales L/R.</p>
           </div>
         )}
 
@@ -241,21 +240,21 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* SPECTRAL MIXER CONSOLE */}
+            {/* SPECTRAL MIXER CONSOLE (DUAL FADER) */}
             <div className="bg-daw-panel border-t border-daw-surface p-6 shadow-2xl overflow-x-auto pb-12">
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-2">
                     <Layers className="h-5 w-5 text-daw-muted" />
-                    <h3 className="font-bold text-white tracking-widest text-sm">CONSOLA ESPECTRAL (8 BANDAS)</h3>
+                    <h3 className="font-bold text-white tracking-widest text-sm">CONSOLA L/R INDEPENDIENTE</h3>
                 </div>
                 <div className="text-xs text-daw-muted font-mono">
-                    MOVER PANEO PARA CREAR STEREO
+                    AJUSTA VOLUMEN L Y R POR SEPARADO
                 </div>
               </div>
               
               <div className="flex gap-2 min-w-max justify-between">
                 {bands.map(band => (
-                  <div key={band.id} className="w-[140px] bg-daw-bg border border-daw-surface rounded-lg p-3 flex flex-col items-center gap-3 relative group hover:border-daw-accent/30 transition-colors">
+                  <div key={band.id} className="w-[160px] bg-daw-bg border border-daw-surface rounded-lg p-3 flex flex-col items-center gap-3 relative group hover:border-daw-accent/30 transition-colors">
                     
                     {/* Frequency Header */}
                     <div className="w-full text-center">
@@ -271,11 +270,32 @@ const App: React.FC = () => {
 
                     <div className="w-full h-[1px] bg-daw-surface my-1"></div>
 
-                    {/* PANNING (The core feature) */}
-                    <Knob label="STEREO PAN" value={band.pan} min={-1} max={1} step={0.05} onChange={(v) => updateBand(band.id, { pan: v })} color={band.color} />
-                    
-                    {/* VOL */}
-                    <Fader value={band.volume} min={0} max={1.5} step={0.01} onChange={(v) => updateBand(band.id, { volume: v })} height="h-32" />
+                    {/* DUAL FADERS */}
+                    <div className="flex justify-between w-full gap-2 px-1">
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-[9px] font-bold text-[#00f0ff]">L</span>
+                        <Fader 
+                          value={band.gainL} min={0} max={1.5} step={0.01} 
+                          onChange={(v) => updateBand(band.id, { gainL: v })} 
+                          height="h-32" 
+                          colorClass="bg-[#00f0ff]" 
+                        />
+                        <span className="text-[9px] text-gray-500 font-mono">{(band.gainL * 100).toFixed(0)}</span>
+                      </div>
+
+                      <div className="w-[1px] bg-daw-surface h-32 self-center"></div>
+
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-[9px] font-bold text-[#ff003c]">R</span>
+                        <Fader 
+                          value={band.gainR} min={0} max={1.5} step={0.01} 
+                          onChange={(v) => updateBand(band.id, { gainR: v })} 
+                          height="h-32" 
+                          colorClass="bg-[#ff003c]" 
+                        />
+                        <span className="text-[9px] text-gray-500 font-mono">{(band.gainR * 100).toFixed(0)}</span>
+                      </div>
+                    </div>
                     
                   </div>
                 ))}
@@ -298,7 +318,6 @@ const App: React.FC = () => {
                      <button onClick={() => setExportSettings(s => ({...s, format: 'mp3'}))} className={`flex-1 py-2 text-sm rounded ${exportSettings.format === 'mp3' ? 'bg-daw-accent text-black font-bold' : 'bg-daw-surface'}`}>MP3</button>
                    </div>
                  </div>
-                 {/* Simplified Sample Rate for Export */}
                  <div>
                    <label className="text-xs text-daw-muted block mb-1">CALIDAD</label>
                    <select 

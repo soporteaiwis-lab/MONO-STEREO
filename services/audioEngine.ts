@@ -3,7 +3,7 @@ import { FrequencyBand } from '../types';
 /**
  * AIWIS Spectral Engine
  * Core Function: Takes a mono signal, splits it into frequency bands, 
- * pans them individually, and sums them into a true stereo bus.
+ * allows independent L/R gain control, and sums to stereo.
  */
 export class AudioEngine {
   public audioContext: AudioContext | null = null;
@@ -21,8 +21,9 @@ export class AudioEngine {
   private bandNodes: Map<string, {
     inputGain: GainNode;
     filters: BiquadFilterNode[];
-    panner: StereoPannerNode;
-    outputGain: GainNode;
+    gainL: GainNode; // Independent Left Fader
+    gainR: GainNode; // Independent Right Fader
+    merger: ChannelMergerNode;
   }> = new Map();
 
   initContext() {
@@ -102,12 +103,11 @@ export class AudioEngine {
     // 1. Input Gain
     const inputGain = this.audioContext.createGain();
     
-    // 2. Filter Bank (High Pass + Low Pass to isolate range)
-    // Using 4th order filters (2 nodes cascaded) for steeper slopes and cleaner isolation
+    // 2. Filter Bank (Isolation)
     const lowCut1 = this.audioContext.createBiquadFilter();
     lowCut1.type = 'highpass';
     lowCut1.frequency.value = band.range[0];
-    lowCut1.Q.value = 0.7; // Butterworth
+    lowCut1.Q.value = 0.7; 
 
     const lowCut2 = this.audioContext.createBiquadFilter();
     lowCut2.type = 'highpass';
@@ -124,30 +124,41 @@ export class AudioEngine {
     highCut2.frequency.value = band.range[1];
     highCut2.Q.value = 0.7;
 
-    // 3. Panner (The Magic Maker)
-    const panner = this.audioContext.createStereoPanner();
-    panner.pan.value = band.pan;
+    // 3. Dual Gain Stage (L/R Independent Faders)
+    const gainL = this.audioContext.createGain();
+    gainL.gain.value = band.muted ? 0 : band.gainL;
 
-    // 4. Output Volume
-    const outputGain = this.audioContext.createGain();
-    outputGain.gain.value = band.muted ? 0 : band.volume;
+    const gainR = this.audioContext.createGain();
+    gainR.gain.value = band.muted ? 0 : band.gainR;
+
+    // 4. Merger (Recombine to Stereo Bus)
+    const merger = this.audioContext.createChannelMerger(2);
 
     // Connect Chain
-    // Source -> InputGain -> LC1 -> LC2 -> HC1 -> HC2 -> Panner -> OutputGain -> Master
+    // Source -> InputGain -> Filters
     this.sourceNode.connect(inputGain);
     inputGain.connect(lowCut1);
     lowCut1.connect(lowCut2);
     lowCut2.connect(highCut1);
     highCut1.connect(highCut2);
-    highCut2.connect(panner);
-    panner.connect(outputGain);
-    outputGain.connect(this.masterGain);
+    
+    // Filters -> GainL -> Merger(0) [Left Channel]
+    highCut2.connect(gainL);
+    gainL.connect(merger, 0, 0);
+
+    // Filters -> GainR -> Merger(1) [Right Channel]
+    highCut2.connect(gainR);
+    gainR.connect(merger, 0, 1);
+
+    // Merger -> Master
+    merger.connect(this.masterGain);
 
     this.bandNodes.set(band.id, {
       inputGain,
       filters: [lowCut1, lowCut2, highCut1, highCut2],
-      panner,
-      outputGain
+      gainL,
+      gainR,
+      merger
     });
   }
 
@@ -156,15 +167,21 @@ export class AudioEngine {
     if (!nodes || !this.audioContext) return;
     const time = this.audioContext.currentTime;
 
-    // Pan (Immediate)
-    nodes.panner.pan.setTargetAtTime(band.pan, time, 0.05);
-
     // Gain Logic (Mute/Solo)
-    let targetGain = band.volume;
-    if (band.muted) targetGain = 0;
-    if (soloActive && !band.solo) targetGain = 0;
+    let targetGainL = band.gainL;
+    let targetGainR = band.gainR;
+
+    if (band.muted) {
+        targetGainL = 0;
+        targetGainR = 0;
+    }
+    if (soloActive && !band.solo) {
+        targetGainL = 0;
+        targetGainR = 0;
+    }
     
-    nodes.outputGain.gain.setTargetAtTime(targetGain, time, 0.05);
+    nodes.gainL.gain.setTargetAtTime(targetGainL, time, 0.05);
+    nodes.gainR.gain.setTargetAtTime(targetGainR, time, 0.05);
   }
 
   // --- Transport ---
@@ -195,7 +212,6 @@ export class AudioEngine {
     if (this.audioElement) this.seek(this.audioElement.currentTime + seconds);
   }
 
-  // Get Stereo Analysis
   getAnalysisData(): { left: Uint8Array, right: Uint8Array } {
     if (!this.analyserL || !this.analyserR) return { left: new Uint8Array(0), right: new Uint8Array(0) };
     
