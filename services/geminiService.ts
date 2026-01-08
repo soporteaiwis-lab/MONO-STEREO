@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { SpectralAnalysis, FrequencyBand, ExportSettings, InstrumentCategory, INSTRUMENT_FREQUENCY_MAP } from "../types";
+import { SpectralAnalysis, FrequencyBand, ExportSettings, InstrumentCategory, INSTRUMENT_FREQUENCY_MAP, DETAILED_FREQUENCY_DICTIONARY } from "../types";
 
 const GEMINI_API_KEY = process.env.API_KEY || '';
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
@@ -26,26 +26,29 @@ export const analyzeAudioSession = async (
   const base64Audio = await blobToBase64(audioBlob);
   const instrumentInfo = INSTRUMENT_FREQUENCY_MAP[instrumentCategory];
 
-  // Prompt enriquecido con la tabla de frecuencias
+  // Convert PDF Data to String for the prompt
+  const technicalData = JSON.stringify(DETAILED_FREQUENCY_DICTIONARY, null, 2);
+
   const prompt = `
-    Actúa como un Ingeniero de Mezcla y Mastering experto en análisis espectral.
+    Eres un Ingeniero de Audio Experto.
     
-    CONTEXTO DE ENTRADA:
-    - Audio proporcionado: ${instrumentCategory === 'AUTO' ? 'Detectar Automáticamente' : instrumentInfo.name}
-    - Descripción esperada: ${instrumentInfo.description}
+    CONOCIMIENTO EXPERTO (TABLA DE FRECUENCIAS):
+    ${technicalData}
     
-    TAREA:
-    Analiza este audio Mono para convertirlo a Stereo.
-    Identifica qué instrumentos o componentes residen en cada una de las 8 bandas de frecuencia estándar (Sub, Bass, LowMids, Mids, UpperMids, Presence, Brilliance, Air).
-
-    ${instrumentCategory === 'DRUMS' ? 'MODO BATERÍA ACTIVO: Identifica específicamente dónde está el Bombo (Kick), Caja (Snare), Toms y Platillos para sugerir un paneo "Drummer Perspective".' : ''}
-
-    Salida JSON requerida:
-    1. Frecuencias dominantes.
-    2. Sugerencia de Ancho Estéreo específica para este instrumento.
-    3. Estilo/Vibe.
-    4. Recomendación técnica.
-    5. "detected_instruments_per_band": Un objeto mapeando las bandas (0 a 7) con el contenido detectado (ej: "Bombo Cuerpo", "Voz Aire", "Cuerda Guitarra").
+    AUDIO DE ENTRADA: ${instrumentCategory === 'AUTO' ? 'Detectar Automáticamente' : instrumentInfo.name}
+    DESCRIPCIÓN: ${instrumentInfo.description}
+    
+    OBJETIVO:
+    Analiza este audio Mono.
+    Cruza la información con la Tabla de Frecuencias provista.
+    
+    Para las 8 bandas (Sub 20-60, Bass 60-250, LowMids 250-500, Mids 500-2k, UpMids 2k-4k, Pres 4k-6k, Brill 6k-10k, Air 10k+):
+    1. Identifica qué componente específico reside ahí (ej: "Caja Deep" en 80Hz, "Voz Aire" en 12kHz).
+    2. Usa EXACTAMENTE los términos de la tabla si aplican (ej: "Muddy", "Boomy", "Crisp").
+    
+    SALIDA JSON:
+    - "detected_instruments_per_band": Mapeo de ID de banda (0 a 7) a la descripción exacta del componente detectado.
+    - "technical_recommendation": Consejo de mezcla basado en la tabla (ej: "Cortar 400Hz en el Bombo para quitar Muddy").
   `;
 
   try {
@@ -77,10 +80,10 @@ export const analyzeAudioSession = async (
   } catch (error) {
     console.error(error);
     return {
-      dominant_frequencies: "Análisis no disponible",
-      stereo_width_suggestion: "Ajuste manual requerido",
-      vibe: "Desconocido",
-      technical_recommendation: "Verificar niveles de entrada.",
+      dominant_frequencies: "N/A",
+      stereo_width_suggestion: "Manual",
+      vibe: "Unknown",
+      technical_recommendation: "Check Levels",
       detected_instruments_per_band: {}
     };
   }
@@ -95,21 +98,19 @@ export const generateSessionReport = async (
     const instrumentName = INSTRUMENT_FREQUENCY_MAP[instrumentCategory].name;
     
     const prompt = `
-      Genera un informe HTML de Ingeniería de Audio para AIWIS Spectral Stereoizer.
+      Genera un informe HTML para AIWIS Spectral Stereoizer.
       
-      Fuente de Audio: ${instrumentName}
+      Instrumento: ${instrumentName}
       
-      Análisis Espectral IA:
-      - Dominante: ${analysis?.dominant_frequencies}
-      - Sugerencia: ${analysis?.stereo_width_suggestion}
+      Análisis Técnico (Basado en Tabla PDF):
+      ${analysis?.technical_recommendation}
       
-      Mapa de Paneo (L/R) por Banda:
-      ${bands.map(b => `- ${b.label} [${b.detectedInstrument || 'Generico'}]: L ${(b.gainL*100).toFixed(0)}% / R ${(b.gainR*100).toFixed(0)}%`).join('\n')}
+      Configuración de Stems Exportados:
+      ${bands.map(b => `- ${b.label} [${b.detectedInstrument || b.pdfHint || 'Generico'}]: L:${(b.gainL*100).toFixed(0)}% / R:${(b.gainR*100).toFixed(0)}%`).join('\n')}
       
       INSTRUCCIONES:
-      Genera un reporte HTML profesional con estilos oscuros/minimalistas. 
-      Incluye una sección de "Análisis de Instrumento" detallando cómo se trataron las frecuencias críticas de ${instrumentName}.
-      Si es Batería, menciona la separación de piezas (Bombo, Caja, etc.).
+      HTML profesional, fondo oscuro, texto claro.
+      Incluye una tabla detallando qué frecuencias se realzaron o cortaron según los "Problemas" y "Efectos" del conocimiento experto (Muddy, Boxy, Presence, etc).
     `;
 
     try {

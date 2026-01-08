@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Activity, Zap, Layers, Server, Settings, Download, FileText, AlertCircle, RefreshCw, Play, Eye, Music, Mic2, Drum } from 'lucide-react';
+import { Upload, Activity, Zap, Layers, Server, Settings, Download, FileText, AlertCircle, RefreshCw, Play, Eye, Music, Mic2, Drum, Save } from 'lucide-react';
 import { audioEngine } from './services/audioEngine';
 import { analyzeAudioSession, generateSessionReport } from './services/geminiService';
-import { AppState, SpectralAnalysis, FrequencyBand, ExportSettings, SPECTRAL_BANDS_TEMPLATE, InstrumentCategory, INSTRUMENT_FREQUENCY_MAP } from './types';
+import { AppState, SpectralAnalysis, FrequencyBand, ExportSettings, SPECTRAL_BANDS_TEMPLATE, BAND_COLORS, InstrumentCategory, INSTRUMENT_FREQUENCY_MAP } from './types';
 import Visualizer from './components/Visualizer';
 import WaveformPreview from './components/WaveformPreview';
 import Fader from './components/Fader';
@@ -15,23 +15,18 @@ const App: React.FC = () => {
   const [bands, setBands] = useState<FrequencyBand[]>([]);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [analysis, setAnalysis] = useState<SpectralAnalysis | null>(null);
-  
-  // New: Instrument Category
   const [selectedInstrument, setSelectedInstrument] = useState<InstrumentCategory>('AUTO');
-
-  // Studio State
+  
+  // Studio
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  // Generated Audio Preview
+  // Buffer
   const [generatedBuffer, setGeneratedBuffer] = useState<AudioBuffer | null>(null);
 
-  // Modals
+  // UI
   const [showExportModal, setShowExportModal] = useState(false);
-  const [exportSettings, setExportSettings] = useState<ExportSettings>({
-    format: 'wav', sampleRate: 44100, bitDepth: 24, bitRate: 192, standardPitch: true
-  });
   const [reportHTML, setReportHTML] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -54,8 +49,6 @@ const App: React.FC = () => {
     return () => cancelAnimationFrame(timeRef.current);
   }, [isPlaying]);
 
-  // --- Handlers ---
-
   const handleError = (msg: string) => {
     setErrorMessage(msg);
     setState(AppState.ERROR);
@@ -73,45 +66,46 @@ const App: React.FC = () => {
     }
   };
 
-  const getDrumLabel = (index: number, original: string): string => {
-      // Mapping 8 bands to Drum Kit pieces
-      const map = [
-          "KICK SUB",      // 20-60
-          "KICK PUNCH",    // 60-250
-          "SNARE BODY",    // 250-500
-          "SNARE SNAP",    // 500-2k
-          "TOMS / GTR",    // 2k-4k
-          "CYMBALS",       // 4k-6k
-          "OVERHEADS",     // 6k-10k
-          "ROOM / HATS"    // 10k+
-      ];
-      return map[index] || original;
+  // --- LOGICA DE MAPEO PDF PARA BATERIA ---
+  // Mapea las bandas de frecuencia a los rangos específicos del PDF para Batería
+  const getDrumHint = (bandIndex: number): { label: string, hint: string } => {
+     switch(bandIndex) {
+         case 0: return { label: "KICK SUB", hint: "<80Hz (Deep/Boomy)" };
+         case 1: return { label: "KICK/SNARE", hint: "80-200Hz (Bottom/Body)" };
+         case 2: return { label: "SNARE/TOMS", hint: "300-400Hz (Muddy?)" };
+         case 3: return { label: "MIDS", hint: "1kHz (Annoying?)" };
+         case 4: return { label: "ATTACK", hint: "2-5kHz (Kick/Tom Attack)" };
+         case 5: return { label: "PRESENCE", hint: "5kHz (Snap)" };
+         case 6: return { label: "CYMBALS", hint: "8-12kHz (Brilliance)" };
+         case 7: return { label: "AIR", hint: "15kHz (Air)" };
+         default: return { label: "BAND", hint: "" };
+     }
   };
 
   const startSpectralProcessing = async (blob: Blob) => {
     setState(AppState.ANALYZING);
 
     try {
-      // 1. AI Analysis FIRST to determine content if AUTO, or use selected
       const aiResults = await analyzeAudioSession(blob, selectedInstrument);
       setAnalysis(aiResults);
 
-      // 2. Configure Bands based on Instrument Type
       const initialBands: FrequencyBand[] = SPECTRAL_BANDS_TEMPLATE.map((t, idx) => {
         let label = t.label;
+        let hint = "";
         let detected = "";
 
-        // Apply Drum Labels if Drums selected
+        // Apply Drum Specifics from PDF Data Logic
         if (selectedInstrument === 'DRUMS') {
-            label = getDrumLabel(idx, t.label);
+            const drumData = getDrumHint(idx);
+            label = drumData.label;
+            hint = drumData.hint;
         }
 
-        // Apply AI Detected label if available
-        if (aiResults.detected_instruments_per_band && aiResults.detected_instruments_per_band[idx.toString()]) {
-             detected = aiResults.detected_instruments_per_band[idx.toString()];
-        } else if (aiResults.detected_instruments_per_band && aiResults.detected_instruments_per_band[t.label]) {
-            // Fallback key match
-             detected = aiResults.detected_instruments_per_band[t.label];
+        // Apply AI Detected label
+        if (aiResults.detected_instruments_per_band) {
+            // Check index first, then label match
+            detected = aiResults.detected_instruments_per_band[idx.toString()] || 
+                       aiResults.detected_instruments_per_band[t.label] || "";
         }
 
         return {
@@ -122,13 +116,13 @@ const App: React.FC = () => {
           gainR: 1.0, 
           muted: false,
           solo: false,
-          detectedInstrument: detected
+          color: BAND_COLORS[idx],
+          detectedInstrument: detected,
+          pdfHint: hint
         };
       });
     
       setBands(initialBands);
-
-      // 3. Load Audio Engine
       await audioEngine.loadAudio(blob, initialBands);
       setDuration(audioEngine.duration);
 
@@ -153,6 +147,48 @@ const App: React.FC = () => {
 
       return newBands;
     });
+  };
+
+  // --- EXPORT FUNCTIONS ---
+
+  const downloadWav = (buffer: AudioBuffer, filename: string) => {
+      const numOfChan = buffer.numberOfChannels;
+      const length = buffer.length * numOfChan * 2 + 44;
+      const bufferArr = new ArrayBuffer(length);
+      const view = new DataView(bufferArr);
+      const channels = [];
+      let i;
+      let sample;
+      let offset = 0;
+      let pos = 0;
+
+      function setUint16(data: any) { view.setUint16(pos, data, true); pos += 2; }
+      function setUint32(data: any) { view.setUint32(pos, data, true); pos += 4; }
+
+      setUint32(0x46464952); setUint32(length - 8); setUint32(0x45564157);
+      setUint32(0x20746d66); setUint32(16); setUint16(1); setUint16(numOfChan);
+      setUint32(buffer.sampleRate); setUint32(buffer.sampleRate * 2 * numOfChan);
+      setUint16(numOfChan * 2); setUint16(16); setUint32(0x61746164);
+      setUint32(length - pos - 4);
+
+      for(i = 0; i < buffer.numberOfChannels; i++) channels.push(buffer.getChannelData(i));
+
+      while(pos < buffer.length) {
+        for(i = 0; i < numOfChan; i++) {
+          sample = Math.max(-1, Math.min(1, channels[i][pos]));
+          sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767)|0;
+          view.setInt16(44 + offset, sample, true);
+          offset += 2;
+        }
+        pos++;
+      }
+
+      const blob = new Blob([bufferArr], { type: 'audio/wav' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
   };
 
   const handleGeneratePreview = async () => {
@@ -180,49 +216,27 @@ const App: React.FC = () => {
       source.start();
   };
 
-  const handleExport = () => {
-      if (!generatedBuffer) return;
-      
-      // Simple WAV export logic (reused)
-      const buffer = generatedBuffer;
-      const numOfChan = buffer.numberOfChannels;
-      const length = buffer.length * numOfChan * 2 + 44;
-      const bufferArr = new ArrayBuffer(length);
-      const view = new DataView(bufferArr);
-      const channels = [];
-      let i;
-      let sample;
-      let offset = 0;
-      let pos = 0;
-
-      setUint32(0x46464952); setUint32(length - 8); setUint32(0x45564157);
-      setUint32(0x20746d66); setUint32(16); setUint16(1); setUint16(numOfChan);
-      setUint32(buffer.sampleRate); setUint32(buffer.sampleRate * 2 * numOfChan);
-      setUint16(numOfChan * 2); setUint16(16); setUint32(0x61746164);
-      setUint32(length - pos - 4);
-
-      for(i = 0; i < buffer.numberOfChannels; i++) channels.push(buffer.getChannelData(i));
-
-      while(pos < buffer.length) {
-        for(i = 0; i < numOfChan; i++) {
-          sample = Math.max(-1, Math.min(1, channels[i][pos]));
-          sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767)|0;
-          view.setInt16(44 + offset, sample, true);
-          offset += 2;
-        }
-        pos++;
+  // --- STEM EXPORT ---
+  const handleDownloadStem = async (band: FrequencyBand) => {
+      setState(AppState.RENDERING);
+      try {
+          const stemBuffer = await audioEngine.renderSingleBand(band);
+          const name = band.detectedInstrument 
+             ? `${band.detectedInstrument.replace(/ /g, '_')}_${band.label}.wav`
+             : `Stem_${band.label}.wav`;
+          
+          downloadWav(stemBuffer, name);
+          setState(AppState.STUDIO);
+      } catch (e) {
+          handleError("Error exportando Stem");
+          setState(AppState.STUDIO);
       }
+  };
 
-      const blob = new Blob([bufferArr], { type: 'audio/wav' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `AIWIS_Stereo_${selectedInstrument}_${Date.now()}.wav`;
-      a.click();
+  const handleExportFull = () => {
+      if (!generatedBuffer) return;
+      downloadWav(generatedBuffer, `AIWIS_Full_Stereo_${selectedInstrument}_${Date.now()}.wav`);
       setShowExportModal(false);
-
-      function setUint16(data: any) { view.setUint16(pos, data, true); pos += 2; }
-      function setUint32(data: any) { view.setUint32(pos, data, true); pos += 4; }
   };
 
   return (
@@ -238,8 +252,8 @@ const App: React.FC = () => {
         </div>
         {state === AppState.STUDIO && (
           <div className="flex gap-4">
-             <button onClick={async () => setReportHTML(await generateSessionReport(analysis, bands, exportSettings, selectedInstrument))} className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-daw-surface hover:text-white rounded transition text-gray-400">
-              <FileText className="h-4 w-4" /> INFORME
+             <button onClick={async () => setReportHTML(await generateSessionReport(analysis, bands, {format:'wav', sampleRate:44100, bitDepth:24, bitRate:320, standardPitch:true}, selectedInstrument))} className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-daw-surface hover:text-white rounded transition text-gray-400">
+              <FileText className="h-4 w-4" /> INFORME PDF
             </button>
           </div>
         )}
@@ -261,14 +275,14 @@ const App: React.FC = () => {
             <div className="text-center space-y-4">
               <h2 className="text-5xl font-black text-white tracking-tighter">SPECTRAL <span className="text-daw-accent">STEREOIZER</span></h2>
               <p className="text-xl text-daw-muted max-w-2xl mx-auto">
-                Transformación Mono a Stereo Inteligente basada en Instrumentos.
+                Análisis profundo basado en Tabla de Frecuencias Experta (PDF).
               </p>
             </div>
 
             {/* Instrument Selector */}
-            <div className="bg-daw-panel border border-daw-surface p-6 rounded-xl w-full max-w-lg space-y-4">
-               <label className="text-xs font-bold text-daw-accent uppercase tracking-wider block">1. Selecciona Tipo de Audio</label>
-               <div className="grid grid-cols-2 gap-2">
+            <div className="bg-daw-panel border border-daw-surface p-6 rounded-xl w-full max-w-4xl space-y-4">
+               <label className="text-xs font-bold text-daw-accent uppercase tracking-wider block">Selecciona Instrumento para Mapeo de Frecuencias PDF</label>
+               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   {(Object.keys(INSTRUMENT_FREQUENCY_MAP) as InstrumentCategory[]).map((cat) => (
                       <button
                         key={cat}
@@ -279,7 +293,7 @@ const App: React.FC = () => {
                              : 'bg-daw-bg border-daw-surface text-gray-400 hover:border-gray-500 hover:text-white'}`}
                       >
                          <span className="uppercase">{INSTRUMENT_FREQUENCY_MAP[cat].name}</span>
-                         <span className="text-[9px] opacity-70 font-mono normal-case leading-tight">{INSTRUMENT_FREQUENCY_MAP[cat].description.substring(0, 40)}...</span>
+                         <span className="text-[9px] opacity-70 font-mono normal-case leading-tight">{INSTRUMENT_FREQUENCY_MAP[cat].description}</span>
                       </button>
                   ))}
                </div>
@@ -292,7 +306,7 @@ const App: React.FC = () => {
               <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept="audio/*" />
               <div className="flex items-center gap-3">
                  <Upload className="h-6 w-6 text-daw-accent" />
-                 <span className="text-sm font-bold text-gray-300">CARGAR AUDIO MONO</span>
+                 <span className="text-sm font-bold text-gray-300">CARGAR AUDIO</span>
               </div>
             </div>
           </div>
@@ -306,11 +320,12 @@ const App: React.FC = () => {
               <RefreshCw className="h-16 w-16 text-daw-accent animate-spin relative z-10" />
             </div>
             <h2 className="text-2xl font-mono text-white">
-                {state === AppState.ANALYZING ? "ANALIZANDO FRECUENCIAS..." : "RENDERIZANDO STEREO..."}
+                {state === AppState.ANALYZING ? "ANALIZANDO TABLA DE FRECUENCIAS..." : "RENDERIZANDO STEMS..."}
             </h2>
             {state === AppState.ANALYZING && (
-                <p className="text-daw-muted text-sm font-mono">
-                    Detectando componentes de {INSTRUMENT_FREQUENCY_MAP[selectedInstrument].name}
+                <p className="text-daw-muted text-sm font-mono text-center max-w-md">
+                    Consultando base de datos experta para {INSTRUMENT_FREQUENCY_MAP[selectedInstrument].name}...<br/>
+                    Identificando rangos de: {selectedInstrument === 'DRUMS' ? 'Kick, Snare, Toms, Cymbals' : 'Cuerpo, Brillo, Presencia'}
                 </p>
             )}
           </div>
@@ -320,11 +335,9 @@ const App: React.FC = () => {
         {state === AppState.STUDIO && (
           <div className="space-y-6">
             
-            {/* TOP ROW: REALTIME VISUALIZER + CONTROLS */}
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 h-[320px]">
               <div className="xl:col-span-2 bg-daw-panel border border-daw-surface rounded-lg p-1 relative shadow-2xl overflow-hidden">
                  <Visualizer isPlaying={isPlaying} />
-                 {/* Legend */}
                  <div className="absolute top-2 right-2 flex gap-4 text-[10px] font-mono bg-black/50 p-2 rounded">
                     <div className="flex items-center gap-1"><div className="w-2 h-2 bg-[#00f0ff]"></div> L</div>
                     <div className="flex items-center gap-1"><div className="w-2 h-2 bg-[#ff003c]"></div> R</div>
@@ -338,17 +351,20 @@ const App: React.FC = () => {
               
               <div className="flex flex-col gap-4 h-full">
                  <div className="flex-1 bg-daw-panel border border-daw-surface rounded-lg p-4 custom-scrollbar overflow-y-auto">
-                    <h3 className="flex items-center gap-2 text-white font-bold text-sm mb-3"><Server className="h-4 w-4 text-daw-accent"/> ANÁLISIS ESPECTRAL</h3>
+                    <h3 className="flex items-center gap-2 text-white font-bold text-sm mb-3"><Server className="h-4 w-4 text-daw-accent"/> DIAGNÓSTICO EXPERTO</h3>
                     {analysis ? (
                         <div className="space-y-3 text-xs text-gray-400">
                              <div><span className="text-daw-muted block mb-1">SUGERENCIA STEREO</span><span className="text-daw-accent">{analysis.stereo_width_suggestion}</span></div>
-                            <p className="italic border-l-2 border-daw-secondary pl-2 text-[10px]">{analysis.technical_recommendation}</p>
+                            <div className="p-2 bg-daw-surface/50 rounded border-l-2 border-daw-accent">
+                                <span className="text-gray-300 block mb-1 font-bold">Recomendación Técnica PDF:</span>
+                                <p className="italic text-[10px]">{analysis.technical_recommendation}</p>
+                            </div>
                             <div>
-                                <span className="text-daw-muted block mb-1">FRECUENCIAS DOMINANTES</span>
+                                <span className="text-daw-muted block mb-1">DOMINANTE</span>
                                 <span className="font-mono text-white">{analysis.dominant_frequencies}</span>
                             </div>
                         </div>
-                    ) : <span className="text-xs text-daw-muted animate-pulse">Consultando...</span>}
+                    ) : null}
                  </div>
                  
                  <div className="">
@@ -365,43 +381,61 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* MIDDLE ROW: MIXER */}
+            {/* MIXER */}
             <div className="bg-daw-panel border-t border-daw-surface p-6 shadow-2xl overflow-x-auto pb-12">
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-2">
                     {selectedInstrument === 'DRUMS' ? <Drum className="h-5 w-5 text-daw-accent"/> : <Layers className="h-5 w-5 text-daw-muted" />}
                     <h3 className="font-bold text-white tracking-widest text-sm">
-                        {selectedInstrument === 'DRUMS' ? 'MEZCLADOR DE BATERÍA (KIT SPLIT)' : 'CONSOLA L/R INDEPENDIENTE'}
+                        {selectedInstrument === 'DRUMS' ? 'SEPARADOR DE PIEZAS DE BATERÍA (KIT SPLIT)' : 'CONSOLA DE FRECUENCIAS DETALLADA'}
                     </h3>
                 </div>
               </div>
               <div className="flex gap-2 min-w-max justify-between">
                 {bands.map(band => (
-                  <div key={band.id} className="w-[160px] bg-daw-bg border border-daw-surface rounded-lg p-3 flex flex-col items-center gap-3 relative group hover:border-daw-accent/30 transition-colors">
+                  <div key={band.id} className="w-[170px] bg-daw-bg border border-daw-surface rounded-lg p-3 flex flex-col items-center gap-3 relative group hover:border-daw-accent/30 transition-colors">
                     <div className="w-full text-center">
                        <h4 className={`text-xs font-black ${band.color}`}>{band.label}</h4>
-                       {/* AI Detected Label */}
-                       {band.detectedInstrument && (
-                           <span className="block mt-1 text-[9px] bg-daw-surface text-daw-accent px-1 rounded animate-pulse">
-                               {band.detectedInstrument}
-                           </span>
-                       )}
-                       <span className="text-[9px] text-gray-500 font-mono block mt-1">{band.range[0]}Hz - {band.range[1]}Hz</span>
+                       
+                       {/* AI Detected Instrument Label */}
+                       <div className="h-10 flex flex-col justify-center">
+                           {band.detectedInstrument ? (
+                               <span className="text-[10px] text-white bg-daw-surface px-2 py-0.5 rounded border border-gray-700 block">
+                                   {band.detectedInstrument}
+                               </span>
+                           ) : (
+                               <span className="text-[9px] text-gray-600 font-mono">
+                                   {band.pdfHint || `${band.range[0]}-${band.range[1]}Hz`}
+                               </span>
+                           )}
+                       </div>
+
+                       {/* Stem Download Button */}
+                       <button 
+                         onClick={() => handleDownloadStem(band)}
+                         className="mt-2 w-full flex items-center justify-center gap-1 bg-gray-800 hover:bg-daw-accent hover:text-black text-[9px] py-1 rounded transition border border-gray-700"
+                         title="Exportar esta banda como archivo separado"
+                       >
+                           <Save className="h-3 w-3" /> STEM
+                       </button>
                     </div>
-                    <div className="flex justify-center gap-1 w-full">
+
+                    <div className="flex justify-center gap-1 w-full mt-2">
                        <button onClick={() => updateBand(band.id, { muted: !band.muted })} className={`flex-1 py-1 text-[10px] font-bold rounded ${band.muted ? 'bg-daw-surface text-gray-500' : 'bg-daw-surface text-gray-300 hover:bg-gray-700'}`}>M</button>
                        <button onClick={() => updateBand(band.id, { solo: !band.solo })} className={`flex-1 py-1 text-[10px] font-bold rounded ${band.solo ? 'bg-yellow-400 text-black' : 'bg-daw-surface text-gray-300 hover:bg-gray-700'}`}>S</button>
                     </div>
+
                     <div className="w-full h-[1px] bg-daw-surface my-1"></div>
+
                     <div className="flex justify-between w-full gap-2 px-1">
                       <div className="flex flex-col items-center gap-1">
                         <span className="text-[9px] font-bold text-[#00f0ff]">L</span>
-                        <Fader value={band.gainL} min={0} max={1.5} step={0.01} onChange={(v) => updateBand(band.id, { gainL: v })} height="h-32" colorClass="bg-[#00f0ff]" />
+                        <Fader value={band.gainL} min={0} max={1.5} step={0.01} onChange={(v) => updateBand(band.id, { gainL: v })} height="h-28" colorClass="bg-[#00f0ff]" />
                       </div>
-                      <div className="w-[1px] bg-daw-surface h-32 self-center"></div>
+                      <div className="w-[1px] bg-daw-surface h-28 self-center"></div>
                       <div className="flex flex-col items-center gap-1">
                         <span className="text-[9px] font-bold text-[#ff003c]">R</span>
-                        <Fader value={band.gainR} min={0} max={1.5} step={0.01} onChange={(v) => updateBand(band.id, { gainR: v })} height="h-32" colorClass="bg-[#ff003c]" />
+                        <Fader value={band.gainR} min={0} max={1.5} step={0.01} onChange={(v) => updateBand(band.id, { gainR: v })} height="h-28" colorClass="bg-[#ff003c]" />
                       </div>
                     </div>
                   </div>
@@ -409,34 +443,33 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* BOTTOM ROW: PREVIEW & EXPORT */}
+            {/* PREVIEW & EXPORT */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-20">
                  <div className="bg-daw-panel border border-daw-surface rounded-xl p-6 flex flex-col items-center justify-center gap-4 text-center">
-                    <h3 className="text-white font-bold text-sm">1. GENERAR STEREO</h3>
-                    <p className="text-xs text-gray-400">Procesa el audio con la configuración de {INSTRUMENT_FREQUENCY_MAP[selectedInstrument].name} para previsualizar.</p>
+                    <h3 className="text-white font-bold text-sm">1. GENERAR STEREO MIX</h3>
+                    <p className="text-xs text-gray-400">Renderiza todos los cambios para escuchar el resultado final.</p>
                     <button 
                         onClick={handleGeneratePreview}
                         className="flex items-center gap-2 px-8 py-4 bg-daw-accent text-black font-black text-lg rounded hover:shadow-[0_0_20px_rgba(0,240,255,0.4)] transition"
                     >
-                        <Settings className="h-5 w-5 animate-spin-slow" /> GENERAR PREVISUALIZACIÓN
+                        <Settings className="h-5 w-5 animate-spin-slow" /> RENDERIZAR TODO
                     </button>
                  </div>
 
                  <div className={`bg-daw-panel border border-daw-surface rounded-xl p-6 flex flex-col gap-4 ${!generatedBuffer ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
                     <div className="flex justify-between items-center">
-                        <h3 className="text-white font-bold text-sm flex items-center gap-2"><Eye className="h-4 w-4"/> RESULTADO FINAL</h3>
+                        <h3 className="text-white font-bold text-sm flex items-center gap-2"><Eye className="h-4 w-4"/> FINAL MIXDOWN</h3>
                         <span className="text-[10px] text-daw-success font-mono">READY</span>
                     </div>
                     
-                    {/* Static Preview */}
                     <WaveformPreview buffer={generatedBuffer} />
                     
                     <div className="flex gap-2">
                         <button onClick={playGeneratedAudio} className="flex-1 py-2 bg-daw-surface hover:bg-daw-surface/80 rounded text-xs font-bold flex items-center justify-center gap-2">
-                            <Play className="h-3 w-3" /> ESCUCHAR
+                            <Play className="h-3 w-3" /> PLAY
                         </button>
-                        <button onClick={handleExport} className="flex-1 py-2 bg-daw-success text-black rounded text-xs font-bold flex items-center justify-center gap-2 hover:bg-green-400">
-                            <Download className="h-3 w-3" /> DESCARGAR WAV
+                        <button onClick={handleExportFull} className="flex-1 py-2 bg-daw-success text-black rounded text-xs font-bold flex items-center justify-center gap-2 hover:bg-green-400">
+                            <Download className="h-3 w-3" /> DESCARGAR FULL
                         </button>
                     </div>
                  </div>
@@ -450,7 +483,7 @@ const App: React.FC = () => {
           <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4">
             <div className="bg-daw-panel border border-daw-surface rounded-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
                <div className="p-6 border-b border-daw-surface flex justify-between items-center">
-                   <h3 className="text-xl font-bold text-white flex items-center gap-2"><FileText className="h-5 w-5 text-daw-accent"/> INFORME DE MASTERING</h3>
+                   <h3 className="text-xl font-bold text-white flex items-center gap-2"><FileText className="h-5 w-5 text-daw-accent"/> INFORME TÉCNICO PDF</h3>
                    <button onClick={() => setReportHTML(null)} className="text-gray-400 hover:text-white">✕</button>
                </div>
                <div className="p-8 overflow-y-auto prose prose-invert max-w-none">

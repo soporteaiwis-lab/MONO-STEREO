@@ -67,9 +67,6 @@ export class AudioEngine {
     if (this.sourceNode) { try { this.sourceNode.stop(); } catch {} }
 
     // Create Source (Buffer)
-    // Note: We create the source only when play() is called, 
-    // but we need the graph ready.
-    
     this.masterCompressor = this.audioContext.createDynamicsCompressor();
     this.masterCompressor.threshold.value = -10;
     this.masterCompressor.ratio.value = 12;
@@ -81,7 +78,6 @@ export class AudioEngine {
     this.analyserR = this.audioContext.createAnalyser();
     this.analyserL.fftSize = 2048; 
     this.analyserR.fftSize = 2048;
-    // Use Time Domain for Waveform visualization
     
     this.masterGain.connect(this.masterCompressor);
     this.masterCompressor.connect(this.audioContext.destination);
@@ -111,7 +107,6 @@ export class AudioEngine {
 
   /**
    * Shared Logic for creating the EQ/Pan Graph.
-   * Used by both Real-time Context and OfflineContext.
    */
   private createBandNodes(
       ctx: BaseAudioContext, 
@@ -236,26 +231,23 @@ export class AudioEngine {
      this.seek(this.currentTime + seconds, bands);
   }
 
-  // --- Offline Rendering (The "Generate" feature) ---
+  // --- Offline Rendering (Full Mix) ---
 
   async renderOffline(bands: FrequencyBand[]): Promise<AudioBuffer> {
       if (!this.decodedBuffer) throw new Error("No audio loaded");
 
-      // 1. Create Offline Context
       const offlineCtx = new OfflineAudioContext(
-          2, // Stereo
+          2, 
           this.decodedBuffer.length,
           this.decodedBuffer.sampleRate
       );
 
-      // 2. Setup Source in Offline Context
       const source = offlineCtx.createBufferSource();
       source.buffer = this.decodedBuffer;
       
       const inputSplitter = offlineCtx.createGain();
       const master = offlineCtx.createGain();
       
-      // Compressor on output
       const compressor = offlineCtx.createDynamicsCompressor();
       compressor.threshold.value = -10;
       compressor.ratio.value = 12;
@@ -264,15 +256,38 @@ export class AudioEngine {
       master.connect(compressor);
       compressor.connect(offlineCtx.destination);
 
-      // 3. Build Graph using shared logic
       bands.forEach(band => {
           this.createBandNodes(offlineCtx, inputSplitter, master, band, false);
       });
 
-      // 4. Render
       source.start(0);
-      const renderedBuffer = await offlineCtx.startRendering();
-      return renderedBuffer;
+      return await offlineCtx.startRendering();
+  }
+
+  // --- Stem Rendering (Single Band) ---
+  async renderSingleBand(targetBand: FrequencyBand): Promise<AudioBuffer> {
+    if (!this.decodedBuffer) throw new Error("No audio loaded");
+
+    const offlineCtx = new OfflineAudioContext(
+        2, 
+        this.decodedBuffer.length,
+        this.decodedBuffer.sampleRate
+    );
+
+    const source = offlineCtx.createBufferSource();
+    source.buffer = this.decodedBuffer;
+    
+    const inputSplitter = offlineCtx.createGain();
+    const master = offlineCtx.createGain(); // Direct to master, no comp for stems? Or light comp? Let's keep consistent.
+    
+    source.connect(inputSplitter);
+    master.connect(offlineCtx.destination);
+
+    // Create ONLY the target band chain
+    this.createBandNodes(offlineCtx, inputSplitter, master, targetBand, false);
+
+    source.start(0);
+    return await offlineCtx.startRendering();
   }
 
   // --- Visualization Data (Waveform) ---
@@ -283,7 +298,6 @@ export class AudioEngine {
     const leftData = new Uint8Array(binCount);
     const rightData = new Uint8Array(binCount);
     
-    // Get Time Domain Data (Waveform) instead of Frequency Data
     this.analyserL.getByteTimeDomainData(leftData);
     this.analyserR.getByteTimeDomainData(rightData);
     
