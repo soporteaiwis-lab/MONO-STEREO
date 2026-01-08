@@ -134,6 +134,7 @@ export class AudioEngine {
 
   /**
    * Shared Logic for creating the EQ/Pan Graph.
+   * IMPROVED: Uses 3 cascaded filters per side for steeper slopes (High precision isolation)
    */
   private createBandNodes(
       ctx: BaseAudioContext, 
@@ -142,50 +143,53 @@ export class AudioEngine {
       band: FrequencyBand,
       isRealTime: boolean
   ) {
-    // 1. Input Gain (Band specific, not currently used, but good for structure)
-    // 2. Filter Bank (Isolation)
-    // Using 4th order Linkwitz-Riley crossover simulation (2x 2nd order)
-    const lowCut1 = ctx.createBiquadFilter();
-    lowCut1.type = 'highpass';
-    lowCut1.frequency.value = band.range[0];
-    lowCut1.Q.value = 0.7; 
+    // 1. Filter Bank (Isolation) - High Order (Steep Slope)
+    // Cascading 3 filters creates an 18dB/octave slope minimum, much sharper than before.
+    
+    const createFilter = (type: BiquadFilterType, freq: number, q: number) => {
+        const f = ctx.createBiquadFilter();
+        f.type = type;
+        f.frequency.value = freq;
+        f.Q.value = q;
+        return f;
+    };
 
-    const lowCut2 = ctx.createBiquadFilter();
-    lowCut2.type = 'highpass';
-    lowCut2.frequency.value = band.range[0];
-    lowCut2.Q.value = 0.7;
+    // Low Cut Chain (Highpass)
+    const hp1 = createFilter('highpass', band.range[0], 0.707);
+    const hp2 = createFilter('highpass', band.range[0], 0.707);
+    const hp3 = createFilter('highpass', band.range[0], 0.707);
 
-    const highCut1 = ctx.createBiquadFilter();
-    highCut1.type = 'lowpass';
-    highCut1.frequency.value = band.range[1];
-    highCut1.Q.value = 0.7;
+    // High Cut Chain (Lowpass)
+    const lp1 = createFilter('lowpass', band.range[1], 0.707);
+    const lp2 = createFilter('lowpass', band.range[1], 0.707);
+    const lp3 = createFilter('lowpass', band.range[1], 0.707);
 
-    const highCut2 = ctx.createBiquadFilter();
-    highCut2.type = 'lowpass';
-    highCut2.frequency.value = band.range[1];
-    highCut2.Q.value = 0.7;
-
-    // 3. Dual Gain Stage (L/R Independent Faders)
+    // 2. Dual Gain Stage (L/R Independent Faders)
     const gainL = ctx.createGain();
     gainL.gain.value = band.muted ? 0 : band.gainL;
 
     const gainR = ctx.createGain();
     gainR.gain.value = band.muted ? 0 : band.gainR;
 
-    // 4. Merger (Recombine to Stereo Bus)
+    // 3. Merger (Recombine to Stereo Bus)
     const merger = ctx.createChannelMerger(2);
 
-    // Connections
-    inputNode.connect(lowCut1);
-    lowCut1.connect(lowCut2);
-    lowCut2.connect(highCut1);
-    highCut1.connect(highCut2);
+    // Connections: Input -> HP Chain -> LP Chain -> Split to Gains
+    inputNode.connect(hp1);
+    hp1.connect(hp2);
+    hp2.connect(hp3);
     
-    highCut2.connect(gainL);
-    gainL.connect(merger, 0, 0); // Connect to Left input of Merger
-
-    highCut2.connect(gainR);
-    gainR.connect(merger, 0, 1); // Connect to Right input of Merger
+    hp3.connect(lp1);
+    lp1.connect(lp2);
+    lp2.connect(lp3);
+    
+    // Split to L/R Gains
+    lp3.connect(gainL);
+    lp3.connect(gainR);
+    
+    // Connect to Merger
+    gainL.connect(merger, 0, 0); // L
+    gainR.connect(merger, 0, 1); // R
 
     merger.connect(outputNode);
 
@@ -204,10 +208,12 @@ export class AudioEngine {
     let targetGainL = band.gainL;
     let targetGainR = band.gainR;
 
+    // Apply Mute logic
     if (band.muted) {
         targetGainL = 0;
         targetGainR = 0;
     }
+    // Apply Solo Logic (if any solo is active, mute non-soloed)
     if (soloActive && !band.solo) {
         targetGainL = 0;
         targetGainR = 0;
@@ -284,7 +290,21 @@ export class AudioEngine {
       masterGain.connect(compressor);
       compressor.connect(offlineCtx.destination);
 
-      bands.forEach(band => {
+      // Important: Use filter chain logic. 
+      // The createBandNodes function respects the 'muted' and 'gain' properties of the band object passed.
+      // We must ensure 'solo' logic is applied to the bands passed here before calling.
+      const anySolo = bands.some(b => b.solo);
+      const renderBands = bands.map(b => {
+          // Clone to avoid mutating state
+          const rb = {...b};
+          if (anySolo && !rb.solo) {
+              rb.gainL = 0;
+              rb.gainR = 0;
+          }
+          return rb;
+      });
+
+      renderBands.forEach(band => {
           this.createBandNodes(offlineCtx, inputGain, masterGain, band, false);
       });
 

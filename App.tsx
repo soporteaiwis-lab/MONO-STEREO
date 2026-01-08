@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Activity, Zap, Layers, Server, Settings, Download, FileText, AlertCircle, RefreshCw, Play, Eye, Music, Mic2, Drum, Save, ArrowRightLeft, Sliders, Volume2 } from 'lucide-react';
+import { Upload, Activity, Zap, Layers, Server, Settings, Download, FileText, AlertCircle, RefreshCw, Play, Eye, Music, Mic2, Drum, Save, ArrowRightLeft, Sliders, Volume2, Repeat } from 'lucide-react';
 import { audioEngine } from './services/audioEngine';
 import { analyzeAudioSession, generateSessionReport } from './services/geminiService';
 import { AppState, SpectralAnalysis, FrequencyBand, ExportSettings, SPECTRAL_BANDS_TEMPLATE, BAND_COLORS, InstrumentCategory, INSTRUMENT_FREQUENCY_MAP, STEM_ISOLATION_PRESETS } from './types';
@@ -78,6 +78,12 @@ const App: React.FC = () => {
       setAudioBlob(file);
       startSpectralProcessing(file);
     }
+  };
+
+  const handleReAnalyze = () => {
+      if (audioBlob) {
+          startSpectralProcessing(audioBlob);
+      }
   };
 
   // --- LOGICA DE MAPEO PDF PARA BATERIA ---
@@ -238,23 +244,14 @@ const App: React.FC = () => {
       setState(AppState.RENDERING);
 
       try {
+          // Logic: RenderOffline uses the Current State of bands (Gain, Mute, Solo)
+          // So it generates exactly what the user hears in preview.
           const renderedBuffer = await audioEngine.renderOffline(bands);
           setGeneratedBuffer(renderedBuffer);
           setState(AppState.STUDIO);
       } catch (e) {
           handleError("Falló la renderización.");
       }
-  };
-
-  const playGeneratedAudio = () => {
-      if (!generatedBuffer || !audioEngine.audioContext) return;
-      audioEngine.stop();
-      setIsPlaying(false);
-
-      const source = audioEngine.audioContext.createBufferSource();
-      source.buffer = generatedBuffer;
-      source.connect(audioEngine.audioContext.destination);
-      source.start();
   };
 
   const handleDownloadStem = async (band: FrequencyBand) => {
@@ -377,16 +374,29 @@ const App: React.FC = () => {
         {state === AppState.STUDIO && (
           <div className="space-y-6">
 
-             {/* STEREO ALERT */}
-             {isStereoInput && (
-                 <div className="bg-yellow-500/10 border border-yellow-500/50 rounded-lg p-3 flex items-center gap-3 animate-pulse">
-                     <AlertCircle className="h-5 w-5 text-yellow-500" />
-                     <div className="text-xs">
-                         <span className="font-bold text-yellow-400 block">¡FUENTE ESTÉREO DETECTADA!</span>
-                         El audio cargado ya tiene 2 canales. El procesamiento mantendrá la imagen original pero puedes alterar el paneo por bandas.
+             {/* INFO BAR / RE-ANALYZE */}
+             <div className="flex flex-wrap items-center justify-between gap-4 bg-daw-panel p-3 rounded-lg border border-daw-surface">
+                 <div className="flex items-center gap-3">
+                     {isStereoInput && (
+                         <div className="px-3 py-1 bg-yellow-500/20 text-yellow-400 text-xs font-bold rounded border border-yellow-500/50 flex items-center gap-2">
+                             <AlertCircle className="h-4 w-4" /> FUENTE ESTÉREO
+                         </div>
+                     )}
+                     <div className="px-3 py-1 bg-daw-accent/10 text-daw-accent text-xs font-bold rounded border border-daw-accent/30">
+                        MODO: {INSTRUMENT_FREQUENCY_MAP[selectedInstrument].name}
                      </div>
                  </div>
-             )}
+                 
+                 <div className="flex items-center gap-2">
+                     <span className="text-xs text-gray-500">¿Cambiaste el modo?</span>
+                     <button 
+                        onClick={handleReAnalyze}
+                        className="flex items-center gap-2 px-3 py-1 bg-daw-surface hover:bg-white hover:text-black rounded text-xs font-bold transition"
+                     >
+                         <RefreshCw className="h-3 w-3" /> RECALCULAR ANÁLISIS
+                     </button>
+                 </div>
+             </div>
             
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 h-[320px]">
               <div className="xl:col-span-2 bg-daw-panel border border-daw-surface rounded-lg p-1 relative shadow-2xl overflow-hidden flex flex-col">
@@ -397,14 +407,9 @@ const App: React.FC = () => {
                     <div className="flex items-center gap-1"><div className="w-2 h-2 bg-[#ff003c]"></div> R</div>
                  </div>
                  <div className="absolute bottom-2 left-2 flex gap-2">
-                     <span className="px-2 py-1 bg-daw-accent text-black text-[10px] font-bold rounded uppercase flex items-center gap-2">
-                        MODO: {INSTRUMENT_FREQUENCY_MAP[selectedInstrument].name}
+                     <span className="px-2 py-1 bg-black/50 text-daw-accent text-[10px] font-bold rounded uppercase">
+                        VISTA PREVIA: TIEMPO REAL
                      </span>
-                     {selectedInstrument === 'DRUMS' && (
-                         <span className="px-2 py-1 bg-daw-surface text-white text-[10px] font-bold rounded uppercase border border-gray-600">
-                             KIT SPLIT HABILITADO
-                         </span>
-                     )}
                  </div>
               </div>
               
@@ -416,7 +421,7 @@ const App: React.FC = () => {
                             {analysis.suggested_mode && analysis.suggested_mode !== 'AUTO' && (
                                 <div className="p-2 bg-daw-accent/10 border border-daw-accent/30 rounded text-white mb-2">
                                     <span className="block text-[10px] text-daw-accent mb-1 font-bold uppercase">Auto-Detección:</span>
-                                    Detectado <span className="font-bold">{analysis.suggested_mode}</span>. Entorno reconfigurado.
+                                    Detectado <span className="font-bold">{analysis.suggested_mode}</span>.
                                 </div>
                             )}
                             <div><span className="text-daw-muted block mb-1">SUGERENCIA STEREO</span><span className="text-daw-accent">{analysis.stereo_width_suggestion}</span></div>
@@ -446,7 +451,7 @@ const App: React.FC = () => {
             <div className="bg-daw-panel border border-daw-surface rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-4">
                     <Layers className="h-5 w-5 text-daw-accent"/>
-                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">Etapa 2: Separación de Stems (Virtual)</h3>
+                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">Etapa 2: Separación de Stems (Virtual EQ)</h3>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
                     {Object.keys(STEM_ISOLATION_PRESETS).map(key => (
@@ -552,31 +557,28 @@ const App: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-20">
                  <div className="bg-daw-panel border border-daw-surface rounded-xl p-6 flex flex-col items-center justify-center gap-4 text-center">
                     <h3 className="text-white font-bold text-sm">3. GENERAR STEREO MIX FINAL</h3>
-                    <p className="text-xs text-gray-400">Renderiza todos los cambios de EQ, Paneo y Volumen.</p>
+                    <p className="text-xs text-gray-400">
+                        Renderiza la mezcla actual (incluyendo Mutes, Solos, Volúmenes y EQ) en un archivo de alta calidad.
+                    </p>
                     <button 
                         onClick={handleGeneratePreview}
                         className="flex items-center gap-2 px-8 py-4 bg-daw-accent text-black font-black text-lg rounded hover:shadow-[0_0_20px_rgba(0,240,255,0.4)] transition"
                     >
-                        <Settings className="h-5 w-5 animate-spin-slow" /> RENDERIZAR TODO
+                        <Settings className="h-5 w-5 animate-spin-slow" /> RENDERIZAR MEZCLA ACTUAL
                     </button>
                  </div>
 
                  <div className={`bg-daw-panel border border-daw-surface rounded-xl p-6 flex flex-col gap-4 ${!generatedBuffer ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
                     <div className="flex justify-between items-center">
-                        <h3 className="text-white font-bold text-sm flex items-center gap-2"><Eye className="h-4 w-4"/> FINAL MIXDOWN</h3>
+                        <h3 className="text-white font-bold text-sm flex items-center gap-2"><Eye className="h-4 w-4"/> FINAL MIXDOWN PLAYER</h3>
                         <span className="text-[10px] text-daw-success font-mono">READY</span>
                     </div>
                     
                     <WaveformPreview buffer={generatedBuffer} />
                     
-                    <div className="flex gap-2">
-                        <button onClick={playGeneratedAudio} className="flex-1 py-2 bg-daw-surface hover:bg-daw-surface/80 rounded text-xs font-bold flex items-center justify-center gap-2">
-                            <Play className="h-3 w-3" /> PLAY
-                        </button>
-                        <button onClick={handleExportFull} className="flex-1 py-2 bg-daw-success text-black rounded text-xs font-bold flex items-center justify-center gap-2 hover:bg-green-400">
-                            <Download className="h-3 w-3" /> DESCARGAR FULL
-                        </button>
-                    </div>
+                    <button onClick={handleExportFull} className="w-full py-3 bg-daw-success text-black rounded text-xs font-bold flex items-center justify-center gap-2 hover:bg-green-400 mt-2 shadow-lg">
+                            <Download className="h-4 w-4" /> DESCARGAR ARCHIVO FINAL (.WAV)
+                    </button>
                  </div>
             </div>
 
