@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { SpectralAnalysis, FrequencyBand, ExportSettings } from "../types";
+import { SpectralAnalysis, FrequencyBand, ExportSettings, InstrumentCategory, INSTRUMENT_FREQUENCY_MAP } from "../types";
 
 const GEMINI_API_KEY = process.env.API_KEY || '';
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
@@ -17,20 +17,35 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
-export const analyzeAudioSession = async (audioBlob: Blob): Promise<SpectralAnalysis> => {
+export const analyzeAudioSession = async (
+    audioBlob: Blob, 
+    instrumentCategory: InstrumentCategory
+): Promise<SpectralAnalysis> => {
   if (!GEMINI_API_KEY) throw new Error("API Key requerida");
 
   const base64Audio = await blobToBase64(audioBlob);
+  const instrumentInfo = INSTRUMENT_FREQUENCY_MAP[instrumentCategory];
+
+  // Prompt enriquecido con la tabla de frecuencias
   const prompt = `
-    Actúa como un Ingeniero de Mastering de clase mundial.
-    Analiza este audio Mono.
-    Tu objetivo es sugerir una estrategia para convertirlo en STEREO usando separación por bandas de frecuencia.
+    Actúa como un Ingeniero de Mezcla y Mastering experto en análisis espectral.
     
-    Provee:
-    1. Frecuencias dominantes detectadas (dónde está la energía principal).
-    2. Sugerencia de Ancho Estéreo (ej: "Mantener bajos centrados, abrir medios-agudos al 40%").
-    3. Vibe/Estilo detectado.
-    4. Recomendación técnica breve para la conversión.
+    CONTEXTO DE ENTRADA:
+    - Audio proporcionado: ${instrumentCategory === 'AUTO' ? 'Detectar Automáticamente' : instrumentInfo.name}
+    - Descripción esperada: ${instrumentInfo.description}
+    
+    TAREA:
+    Analiza este audio Mono para convertirlo a Stereo.
+    Identifica qué instrumentos o componentes residen en cada una de las 8 bandas de frecuencia estándar (Sub, Bass, LowMids, Mids, UpperMids, Presence, Brilliance, Air).
+
+    ${instrumentCategory === 'DRUMS' ? 'MODO BATERÍA ACTIVO: Identifica específicamente dónde está el Bombo (Kick), Caja (Snare), Toms y Platillos para sugerir un paneo "Drummer Perspective".' : ''}
+
+    Salida JSON requerida:
+    1. Frecuencias dominantes.
+    2. Sugerencia de Ancho Estéreo específica para este instrumento.
+    3. Estilo/Vibe.
+    4. Recomendación técnica.
+    5. "detected_instruments_per_band": Un objeto mapeando las bandas (0 a 7) con el contenido detectado (ej: "Bombo Cuerpo", "Voz Aire", "Cuerda Guitarra").
   `;
 
   try {
@@ -51,6 +66,7 @@ export const analyzeAudioSession = async (audioBlob: Blob): Promise<SpectralAnal
             stereo_width_suggestion: { type: Type.STRING },
             vibe: { type: Type.STRING },
             technical_recommendation: { type: Type.STRING },
+            detected_instruments_per_band: { type: Type.OBJECT }
           }
         }
       }
@@ -62,9 +78,10 @@ export const analyzeAudioSession = async (audioBlob: Blob): Promise<SpectralAnal
     console.error(error);
     return {
       dominant_frequencies: "Análisis no disponible",
-      stereo_width_suggestion: "Prueba manual sugerida",
+      stereo_width_suggestion: "Ajuste manual requerido",
       vibe: "Desconocido",
-      technical_recommendation: "Ajusta el paneo de frecuencias altas para dar amplitud."
+      technical_recommendation: "Verificar niveles de entrada.",
+      detected_instruments_per_band: {}
     };
   }
 };
@@ -72,27 +89,27 @@ export const analyzeAudioSession = async (audioBlob: Blob): Promise<SpectralAnal
 export const generateSessionReport = async (
   analysis: SpectralAnalysis | null, 
   bands: FrequencyBand[], 
-  settings: ExportSettings
+  settings: ExportSettings,
+  instrumentCategory: InstrumentCategory
 ): Promise<string> => {
+    const instrumentName = INSTRUMENT_FREQUENCY_MAP[instrumentCategory].name;
+    
     const prompt = `
-      Genera un informe técnico de Mastering Espectral para AIWIS en formato HTML.
+      Genera un informe HTML de Ingeniería de Audio para AIWIS Spectral Stereoizer.
       
-      Análisis IA:
+      Fuente de Audio: ${instrumentName}
+      
+      Análisis Espectral IA:
       - Dominante: ${analysis?.dominant_frequencies}
-      - Sugerencia Stereo: ${analysis?.stereo_width_suggestion}
+      - Sugerencia: ${analysis?.stereo_width_suggestion}
       
-      Configuración de Bandas (Spectral Map Dual Channel):
-      ${bands.map(b => `- ${b.label} (${b.range[0]}-${b.range[1]}Hz): L:${(b.gainL*100).toFixed(0)}% / R:${(b.gainR*100).toFixed(0)}%`).join('\n')}
+      Mapa de Paneo (L/R) por Banda:
+      ${bands.map(b => `- ${b.label} [${b.detectedInstrument || 'Generico'}]: L ${(b.gainL*100).toFixed(0)}% / R ${(b.gainR*100).toFixed(0)}%`).join('\n')}
       
-      Formato Salida: ${settings.format.toUpperCase()} ${settings.sampleRate}Hz
-      
-      INSTRUCCIONES DE FORMATO:
-      - Usa etiquetas <h3> para títulos.
-      - Usa <ul> y <li> para listas.
-      - Usa <p> para párrafos.
-      - Estiliza con clases de Tailwind CSS si es posible, o manténlo simple y limpio (texto blanco/gris).
-      - Incluye una sección de "Conclusión de Imagen Estéreo" explicando cómo la mezcla asimétrica afectó la amplitud.
-      - NO incluyas markdown, solo código HTML crudo dentro del body.
+      INSTRUCCIONES:
+      Genera un reporte HTML profesional con estilos oscuros/minimalistas. 
+      Incluye una sección de "Análisis de Instrumento" detallando cómo se trataron las frecuencias críticas de ${instrumentName}.
+      Si es Batería, menciona la separación de piezas (Bombo, Caja, etc.).
     `;
 
     try {
@@ -100,8 +117,8 @@ export const generateSessionReport = async (
             model: "gemini-3-flash-preview",
             contents: prompt
         });
-        return response.text || "<p>No se pudo generar el informe.</p>";
+        return response.text || "<p>Error generando reporte.</p>";
     } catch (e) {
-        return "<p>Error conectando con Gemini para el informe.</p>";
+        return "<p>Error de conexión.</p>";
     }
 };

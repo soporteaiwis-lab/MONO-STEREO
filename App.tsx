@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Activity, Zap, Layers, Server, Settings, Download, FileText, AlertCircle, RefreshCw, Play, Eye } from 'lucide-react';
+import { Upload, Activity, Zap, Layers, Server, Settings, Download, FileText, AlertCircle, RefreshCw, Play, Eye, Music, Mic2, Drum } from 'lucide-react';
 import { audioEngine } from './services/audioEngine';
 import { analyzeAudioSession, generateSessionReport } from './services/geminiService';
-import { AppState, SpectralAnalysis, FrequencyBand, ExportSettings, SPECTRAL_BANDS_TEMPLATE } from './types';
+import { AppState, SpectralAnalysis, FrequencyBand, ExportSettings, SPECTRAL_BANDS_TEMPLATE, InstrumentCategory, INSTRUMENT_FREQUENCY_MAP } from './types';
 import Visualizer from './components/Visualizer';
 import WaveformPreview from './components/WaveformPreview';
 import Fader from './components/Fader';
@@ -16,6 +16,9 @@ const App: React.FC = () => {
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [analysis, setAnalysis] = useState<SpectralAnalysis | null>(null);
   
+  // New: Instrument Category
+  const [selectedInstrument, setSelectedInstrument] = useState<InstrumentCategory>('AUTO');
+
   // Studio State
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -70,25 +73,65 @@ const App: React.FC = () => {
     }
   };
 
+  const getDrumLabel = (index: number, original: string): string => {
+      // Mapping 8 bands to Drum Kit pieces
+      const map = [
+          "KICK SUB",      // 20-60
+          "KICK PUNCH",    // 60-250
+          "SNARE BODY",    // 250-500
+          "SNARE SNAP",    // 500-2k
+          "TOMS / GTR",    // 2k-4k
+          "CYMBALS",       // 4k-6k
+          "OVERHEADS",     // 6k-10k
+          "ROOM / HATS"    // 10k+
+      ];
+      return map[index] || original;
+  };
+
   const startSpectralProcessing = async (blob: Blob) => {
     setState(AppState.ANALYZING);
 
-    // 1. Initialize Bands from Template
-    const initialBands: FrequencyBand[] = SPECTRAL_BANDS_TEMPLATE.map((t, idx) => ({
-      ...t,
-      id: `band_${idx}`,
-      gainL: 1.0, 
-      gainR: 1.0, 
-      muted: false,
-      solo: false
-    }));
-    
-    setBands(initialBands);
-
     try {
+      // 1. AI Analysis FIRST to determine content if AUTO, or use selected
+      const aiResults = await analyzeAudioSession(blob, selectedInstrument);
+      setAnalysis(aiResults);
+
+      // 2. Configure Bands based on Instrument Type
+      const initialBands: FrequencyBand[] = SPECTRAL_BANDS_TEMPLATE.map((t, idx) => {
+        let label = t.label;
+        let detected = "";
+
+        // Apply Drum Labels if Drums selected
+        if (selectedInstrument === 'DRUMS') {
+            label = getDrumLabel(idx, t.label);
+        }
+
+        // Apply AI Detected label if available
+        if (aiResults.detected_instruments_per_band && aiResults.detected_instruments_per_band[idx.toString()]) {
+             detected = aiResults.detected_instruments_per_band[idx.toString()];
+        } else if (aiResults.detected_instruments_per_band && aiResults.detected_instruments_per_band[t.label]) {
+            // Fallback key match
+             detected = aiResults.detected_instruments_per_band[t.label];
+        }
+
+        return {
+          ...t,
+          id: `band_${idx}`,
+          label: label,
+          gainL: 1.0, 
+          gainR: 1.0, 
+          muted: false,
+          solo: false,
+          detectedInstrument: detected
+        };
+      });
+    
+      setBands(initialBands);
+
+      // 3. Load Audio Engine
       await audioEngine.loadAudio(blob, initialBands);
       setDuration(audioEngine.duration);
-      analyzeAudioSession(blob).then(setAnalysis).catch(console.error);
+
       setState(AppState.STUDIO);
     } catch (e) {
       console.error(e);
@@ -104,7 +147,6 @@ const App: React.FC = () => {
       const band = newBands.find(b => b.id === id);
       if (band) audioEngine.updateBandParams(band, activeSolo);
       
-      // Refresh mutes if solo changed
       if ('solo' in updates || 'muted' in updates) {
           newBands.forEach(b => audioEngine.updateBandParams(b, activeSolo));
       }
@@ -119,7 +161,6 @@ const App: React.FC = () => {
       setState(AppState.RENDERING);
 
       try {
-          // Render Offline
           const renderedBuffer = await audioEngine.renderOffline(bands);
           setGeneratedBuffer(renderedBuffer);
           setState(AppState.STUDIO);
@@ -130,7 +171,6 @@ const App: React.FC = () => {
 
   const playGeneratedAudio = () => {
       if (!generatedBuffer || !audioEngine.audioContext) return;
-      // Simple play for preview (stops main engine)
       audioEngine.stop();
       setIsPlaying(false);
 
@@ -141,23 +181,9 @@ const App: React.FC = () => {
   };
 
   const handleExport = () => {
-      if (!generatedBuffer) return; // Should have generated first
+      if (!generatedBuffer) return;
       
-      // Convert AudioBuffer to WAV blob (simplified logic for demo)
-      // In a real app we'd use a wav encoder library. 
-      // Re-using the original blob logic for now if no buffer logic present, 
-      // but ideally we export the `generatedBuffer`.
-      
-      // Since we can't easily encode WAV in pure JS without a lot of code,
-      // we will rely on the "Preview" generation as proof of concept, 
-      // and for this demo, export the ORIGINAL file if no encoder is present,
-      // OR imply that "Generar Preview" is the key step.
-      
-      // For this user request: "Exportar el audio stereo".
-      // We will re-use the `audioBlob` logic but ideally `renderOffline` output should be encoded.
-      // Assuming for this prototype we trigger the download of the file we loaded (or if we had a wav encoder, that).
-      
-      // Let's create a WAV file from the buffer
+      // Simple WAV export logic (reused)
       const buffer = generatedBuffer;
       const numOfChan = buffer.numberOfChannels;
       const length = buffer.length * numOfChan * 2 + 44;
@@ -169,32 +195,19 @@ const App: React.FC = () => {
       let offset = 0;
       let pos = 0;
 
-      // write WAVE header
-      setUint32(0x46464952);                         // "RIFF"
-      setUint32(length - 8);                         // file length - 8
-      setUint32(0x45564157);                         // "WAVE"
+      setUint32(0x46464952); setUint32(length - 8); setUint32(0x45564157);
+      setUint32(0x20746d66); setUint32(16); setUint16(1); setUint16(numOfChan);
+      setUint32(buffer.sampleRate); setUint32(buffer.sampleRate * 2 * numOfChan);
+      setUint16(numOfChan * 2); setUint16(16); setUint32(0x61746164);
+      setUint32(length - pos - 4);
 
-      setUint32(0x20746d66);                         // "fmt " chunk
-      setUint32(16);                                 // length = 16
-      setUint16(1);                                  // PCM (uncompressed)
-      setUint16(numOfChan);
-      setUint32(buffer.sampleRate);
-      setUint32(buffer.sampleRate * 2 * numOfChan);  // avg. bytes/sec
-      setUint16(numOfChan * 2);                      // block-align
-      setUint16(16);                                 // 16-bit (hardcoded)
-
-      setUint32(0x61746164);                         // "data" - chunk
-      setUint32(length - pos - 4);                   // chunk length
-
-      // write interleaved data
-      for(i = 0; i < buffer.numberOfChannels; i++)
-        channels.push(buffer.getChannelData(i));
+      for(i = 0; i < buffer.numberOfChannels; i++) channels.push(buffer.getChannelData(i));
 
       while(pos < buffer.length) {
-        for(i = 0; i < numOfChan; i++) {             // interleave channels
-          sample = Math.max(-1, Math.min(1, channels[i][pos])); // clamp
-          sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767)|0; // scale to 16-bit signed int
-          view.setInt16(44 + offset, sample, true);          // write 16-bit sample
+        for(i = 0; i < numOfChan; i++) {
+          sample = Math.max(-1, Math.min(1, channels[i][pos]));
+          sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767)|0;
+          view.setInt16(44 + offset, sample, true);
           offset += 2;
         }
         pos++;
@@ -204,7 +217,7 @@ const App: React.FC = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `AIWIS_Stereo_Master_${Date.now()}.wav`;
+      a.download = `AIWIS_Stereo_${selectedInstrument}_${Date.now()}.wav`;
       a.click();
       setShowExportModal(false);
 
@@ -225,7 +238,7 @@ const App: React.FC = () => {
         </div>
         {state === AppState.STUDIO && (
           <div className="flex gap-4">
-             <button onClick={async () => setReportHTML(await generateSessionReport(analysis, bands, exportSettings))} className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-daw-surface hover:text-white rounded transition text-gray-400">
+             <button onClick={async () => setReportHTML(await generateSessionReport(analysis, bands, exportSettings, selectedInstrument))} className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-daw-surface hover:text-white rounded transition text-gray-400">
               <FileText className="h-4 w-4" /> INFORME
             </button>
           </div>
@@ -244,22 +257,43 @@ const App: React.FC = () => {
 
         {/* --- IDLE STATE --- */}
         {state === AppState.IDLE && (
-          <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-12 animate-fade-in-up">
+          <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-8 animate-fade-in-up">
             <div className="text-center space-y-4">
               <h2 className="text-5xl font-black text-white tracking-tighter">SPECTRAL <span className="text-daw-accent">STEREOIZER</span></h2>
               <p className="text-xl text-daw-muted max-w-2xl mx-auto">
-                Convierte audio Mono en Stereo Real mediante la manipulación quirúrgica de 8 bandas de frecuencia.
+                Transformación Mono a Stereo Inteligente basada en Instrumentos.
               </p>
             </div>
+
+            {/* Instrument Selector */}
+            <div className="bg-daw-panel border border-daw-surface p-6 rounded-xl w-full max-w-lg space-y-4">
+               <label className="text-xs font-bold text-daw-accent uppercase tracking-wider block">1. Selecciona Tipo de Audio</label>
+               <div className="grid grid-cols-2 gap-2">
+                  {(Object.keys(INSTRUMENT_FREQUENCY_MAP) as InstrumentCategory[]).map((cat) => (
+                      <button
+                        key={cat}
+                        onClick={() => setSelectedInstrument(cat)}
+                        className={`p-3 text-left rounded border text-xs font-bold transition flex flex-col gap-1
+                           ${selectedInstrument === cat 
+                             ? 'bg-daw-accent text-black border-daw-accent' 
+                             : 'bg-daw-bg border-daw-surface text-gray-400 hover:border-gray-500 hover:text-white'}`}
+                      >
+                         <span className="uppercase">{INSTRUMENT_FREQUENCY_MAP[cat].name}</span>
+                         <span className="text-[9px] opacity-70 font-mono normal-case leading-tight">{INSTRUMENT_FREQUENCY_MAP[cat].description.substring(0, 40)}...</span>
+                      </button>
+                  ))}
+               </div>
+            </div>
+
             <div 
               onClick={() => fileInputRef.current?.click()}
-              className="w-80 h-48 bg-daw-panel border-2 border-dashed border-daw-surface hover:border-daw-accent hover:bg-daw-surface/50 rounded-2xl flex flex-col items-center justify-center gap-4 cursor-pointer transition group"
+              className="w-80 h-32 bg-daw-panel border-2 border-dashed border-daw-surface hover:border-daw-accent hover:bg-daw-surface/50 rounded-2xl flex flex-col items-center justify-center gap-4 cursor-pointer transition group"
             >
               <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept="audio/*" />
-              <div className="p-4 bg-daw-bg rounded-full group-hover:scale-110 transition">
-                 <Upload className="h-8 w-8 text-daw-accent" />
+              <div className="flex items-center gap-3">
+                 <Upload className="h-6 w-6 text-daw-accent" />
+                 <span className="text-sm font-bold text-gray-300">CARGAR AUDIO MONO</span>
               </div>
-              <span className="text-sm font-bold text-gray-300">CARGAR AUDIO MONO</span>
             </div>
           </div>
         )}
@@ -272,8 +306,13 @@ const App: React.FC = () => {
               <RefreshCw className="h-16 w-16 text-daw-accent animate-spin relative z-10" />
             </div>
             <h2 className="text-2xl font-mono text-white">
-                {state === AppState.ANALYZING ? "DIVIDIENDO ESPECTRO..." : "RENDERIZANDO STEREO..."}
+                {state === AppState.ANALYZING ? "ANALIZANDO FRECUENCIAS..." : "RENDERIZANDO STEREO..."}
             </h2>
+            {state === AppState.ANALYZING && (
+                <p className="text-daw-muted text-sm font-mono">
+                    Detectando componentes de {INSTRUMENT_FREQUENCY_MAP[selectedInstrument].name}
+                </p>
+            )}
           </div>
         )}
 
@@ -290,6 +329,11 @@ const App: React.FC = () => {
                     <div className="flex items-center gap-1"><div className="w-2 h-2 bg-[#00f0ff]"></div> L</div>
                     <div className="flex items-center gap-1"><div className="w-2 h-2 bg-[#ff003c]"></div> R</div>
                  </div>
+                 <div className="absolute bottom-2 left-2 flex gap-2">
+                     <span className="px-2 py-1 bg-daw-accent text-black text-[10px] font-bold rounded uppercase">
+                        MODO: {INSTRUMENT_FREQUENCY_MAP[selectedInstrument].name}
+                     </span>
+                 </div>
               </div>
               
               <div className="flex flex-col gap-4 h-full">
@@ -299,6 +343,10 @@ const App: React.FC = () => {
                         <div className="space-y-3 text-xs text-gray-400">
                              <div><span className="text-daw-muted block mb-1">SUGERENCIA STEREO</span><span className="text-daw-accent">{analysis.stereo_width_suggestion}</span></div>
                             <p className="italic border-l-2 border-daw-secondary pl-2 text-[10px]">{analysis.technical_recommendation}</p>
+                            <div>
+                                <span className="text-daw-muted block mb-1">FRECUENCIAS DOMINANTES</span>
+                                <span className="font-mono text-white">{analysis.dominant_frequencies}</span>
+                            </div>
                         </div>
                     ) : <span className="text-xs text-daw-muted animate-pulse">Consultando...</span>}
                  </div>
@@ -321,8 +369,10 @@ const App: React.FC = () => {
             <div className="bg-daw-panel border-t border-daw-surface p-6 shadow-2xl overflow-x-auto pb-12">
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-2">
-                    <Layers className="h-5 w-5 text-daw-muted" />
-                    <h3 className="font-bold text-white tracking-widest text-sm">CONSOLA L/R INDEPENDIENTE</h3>
+                    {selectedInstrument === 'DRUMS' ? <Drum className="h-5 w-5 text-daw-accent"/> : <Layers className="h-5 w-5 text-daw-muted" />}
+                    <h3 className="font-bold text-white tracking-widest text-sm">
+                        {selectedInstrument === 'DRUMS' ? 'MEZCLADOR DE BATERÍA (KIT SPLIT)' : 'CONSOLA L/R INDEPENDIENTE'}
+                    </h3>
                 </div>
               </div>
               <div className="flex gap-2 min-w-max justify-between">
@@ -330,7 +380,13 @@ const App: React.FC = () => {
                   <div key={band.id} className="w-[160px] bg-daw-bg border border-daw-surface rounded-lg p-3 flex flex-col items-center gap-3 relative group hover:border-daw-accent/30 transition-colors">
                     <div className="w-full text-center">
                        <h4 className={`text-xs font-black ${band.color}`}>{band.label}</h4>
-                       <span className="text-[9px] text-gray-500 font-mono block">{band.range[0]}Hz - {band.range[1]}Hz</span>
+                       {/* AI Detected Label */}
+                       {band.detectedInstrument && (
+                           <span className="block mt-1 text-[9px] bg-daw-surface text-daw-accent px-1 rounded animate-pulse">
+                               {band.detectedInstrument}
+                           </span>
+                       )}
+                       <span className="text-[9px] text-gray-500 font-mono block mt-1">{band.range[0]}Hz - {band.range[1]}Hz</span>
                     </div>
                     <div className="flex justify-center gap-1 w-full">
                        <button onClick={() => updateBand(band.id, { muted: !band.muted })} className={`flex-1 py-1 text-[10px] font-bold rounded ${band.muted ? 'bg-daw-surface text-gray-500' : 'bg-daw-surface text-gray-300 hover:bg-gray-700'}`}>M</button>
@@ -357,7 +413,7 @@ const App: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-20">
                  <div className="bg-daw-panel border border-daw-surface rounded-xl p-6 flex flex-col items-center justify-center gap-4 text-center">
                     <h3 className="text-white font-bold text-sm">1. GENERAR STEREO</h3>
-                    <p className="text-xs text-gray-400">Procesa el audio con la configuración actual para previsualizar el resultado final.</p>
+                    <p className="text-xs text-gray-400">Procesa el audio con la configuración de {INSTRUMENT_FREQUENCY_MAP[selectedInstrument].name} para previsualizar.</p>
                     <button 
                         onClick={handleGeneratePreview}
                         className="flex items-center gap-2 px-8 py-4 bg-daw-accent text-black font-black text-lg rounded hover:shadow-[0_0_20px_rgba(0,240,255,0.4)] transition"
